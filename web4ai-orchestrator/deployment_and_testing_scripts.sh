@@ -39,10 +39,24 @@ check_prerequisites() {
         error "This script must be run as root or with sudo"
     fi
     
+    # Package installer helper
+    install_pkg() {
+        local pkg="$1"
+        if command -v apt-get &>/dev/null; then
+            apt-get update -y
+            apt-get install -y "$pkg"
+        elif command -v yum &>/dev/null; then
+            yum install -y "$pkg"
+        else
+            error "$pkg is required but could not be installed automatically"
+        fi
+    }
+
     # Check required commands
     for cmd in python3 pip3 systemctl nginx; do
-        if ! command -v $cmd &> /dev/null; then
-            error "$cmd is required but not installed"
+        if ! command -v "$cmd" &> /dev/null; then
+            warn "$cmd not found – attempting to install"
+            install_pkg "$cmd"
         fi
     done
     

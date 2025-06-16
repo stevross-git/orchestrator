@@ -371,6 +371,17 @@ Create a Grafana dashboard to visualize metrics:
 }
 ```
 
+### Streamlit Dashboard
+
+For an interactive dashboard with built-in controls, run the Streamlit app:
+
+```bash
+streamlit run advanced_dashboard.py
+```
+
+This dashboard displays real-time metrics, node status, and provides buttons to
+start, stop, or restart the orchestrator.
+
 ## 🔄 Task Lifecycle Management
 
 ### Task States
@@ -510,9 +521,24 @@ spec:
   ports:
   - protocol: TCP
     port: 9000
-    targetPort: 9000
+  targetPort: 9000
   type: LoadBalancer
 ```
+
+### Deployment Script
+
+For local deployment and end-to-end testing, you can use the provided
+`deployment_and_testing_scripts.sh` helper:
+
+```bash
+chmod +x web4ai-orchestrator/deployment_and_testing_scripts.sh
+sudo bash web4ai-orchestrator/deployment_and_testing_scripts.sh
+```
+
+This script installs dependencies, configures services, and runs a comprehensive
+test suite. If any required packages such as `nginx` are missing, the script
+will attempt to install them using `apt-get` or `yum`. Ensure the host has
+internet access and sufficient privileges.
 
 ## 🧪 Testing
 
