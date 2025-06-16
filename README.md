@@ -371,6 +371,17 @@ Create a Grafana dashboard to visualize metrics:
 }
 ```
 
+### Streamlit Dashboard
+
+For an interactive dashboard with built-in controls, run the Streamlit app:
+
+```bash
+streamlit run advanced_dashboard.py
+```
+
+This dashboard displays real-time metrics, node status, and provides buttons to
+start, stop, or restart the orchestrator.
+
 ## 🔄 Task Lifecycle Management
 
 ### Task States
