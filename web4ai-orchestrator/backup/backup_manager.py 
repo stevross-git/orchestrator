@@ -1,0 +1,593 @@
+# backup/backup_manager.py - Backup and Disaster Recovery
+"""
+Backup and disaster recovery system for Web4AI Orchestrator
+Handles automated backups, point-in-time recovery, and data synchronization
+"""
+
+import os
+import gzip
+import shutil
+import hashlib
+import boto3
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional
+import json
+import logging
+import threading
+import time
+
+logger = logging.getLogger(__name__)
+
+class BackupManager:
+    """Comprehensive backup and recovery management"""
+    
+    def __init__(self, config: Dict[str, Any], database_manager):
+        self.config = config
+        self.db = database_manager
+        self.backup_config = config.get('backup', {})
+        
+        # Backup storage options
+        self.storage_backends = {
+            'local': LocalBackupStorage(self.backup_config),
+            's3': S3BackupStorage(self.backup_config),
+            'gcs': GCSBackupStorage(self.backup_config)
+        }
+        
+        self.active_backend = self.storage_backends.get(
+            self.backup_config.get('storage_backend', 'local')
+        )
+        
+        # Backup settings
+        self.backup_interval = self.backup_config.get('interval_hours', 6)
+        self.retention_days = self.backup_config.get('retention_days', 30)
+        self.compression_enabled = self.backup_config.get('compression', True)
+        
+        # Background backup
+        self.backup_thread = None
+        self.running = False
+    
+    def start_backup_service(self):
+        """Start automated backup service"""
+        if self.running:
+            return
+        
+        self.running = True
+        self.backup_thread = threading.Thread(target=self._backup_loop, daemon=True)
+        self.backup_thread.start()
+        
+        logger.info(f"Backup service started (interval: {self.backup_interval}h)")
+    
+    def stop_backup_service(self):
+        """Stop backup service"""
+        self.running = False
+        if self.backup_thread:
+            self.backup_thread.join()
+        
+        logger.info("Backup service stopped")
+    
+    def _backup_loop(self):
+        """Background backup loop"""
+        while self.running:
+            try:
+                self.create_full_backup()
+                time.sleep(self.backup_interval * 3600)  # Convert hours to seconds
+            except Exception as e:
+                logger.error(f"Backup loop error: {e}")
+                time.sleep(3600)  # Wait 1 hour on error
+    
+    def create_full_backup(self) -> Dict[str, Any]:
+        """Create full system backup"""
+        backup_id = f"backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        
+        try:
+            logger.info(f"Starting full backup: {backup_id}")
+            
+            # Create backup manifest
+            manifest = {
+                'backup_id': backup_id,
+                'timestamp': datetime.utcnow().isoformat(),
+                'backup_type': 'full',
+                'components': [],
+                'checksums': {},
+                'size_bytes': 0
+            }
+            
+            # Backup database
+            db_backup = self._backup_database()
+            if db_backup:
+                manifest['components'].append('database')
+                manifest['checksums']['database'] = db_backup['checksum']
+                manifest['size_bytes'] += db_backup['size']
+            
+            # Backup configuration
+            config_backup = self._backup_configuration()
+            if config_backup:
+                manifest['components'].append('configuration')
+                manifest['checksums']['configuration'] = config_backup['checksum']
+                manifest['size_bytes'] += config_backup['size']
+            
+            # Backup logs
+            logs_backup = self._backup_logs()
+            if logs_backup:
+                manifest['components'].append('logs')
+                manifest['checksums']['logs'] = logs_backup['checksum']
+                manifest['size_bytes'] += logs_backup['size']
+            
+            # Store manifest
+            manifest_data = json.dumps(manifest, indent=2)
+            self.active_backend.store_file(f"{backup_id}/manifest.json", manifest_data.encode())
+            
+            # Cleanup old backups
+            self._cleanup_old_backups()
+            
+            logger.info(f"Backup completed: {backup_id} ({manifest['size_bytes']} bytes)")
+            return manifest
+            
+        except Exception as e:
+            logger.error(f"Backup failed: {e}")
+            return {'error': str(e)}
+    
+    def _backup_database(self) -> Optional[Dict[str, Any]]:
+        """Backup database"""
+        try:
+            if self.db.storage_type == 'postgresql':
+                return self._backup_postgresql()
+            elif self.db.storage_type == 'mongodb':
+                return self._backup_mongodb()
+            elif self.db.storage_type == 'redis':
+                return self._backup_redis()
+            else:
+                return self._backup_memory_data()
+        except Exception as e:
+            logger.error(f"Database backup failed: {e}")
+            return None
+    
+    def _backup_postgresql(self) -> Dict[str, Any]:
+        """Backup PostgreSQL database"""
+        import subprocess
+        
+        db_config = self.config['storage']['postgresql']
+        
+        # Create dump using pg_dump
+        dump_command = [
+            'pg_dump',
+            f"--host={db_config['host']}",
+            f"--port={db_config.get('port', 5432)}",
+            f"--username={db_config['username']}",
+            f"--dbname={db_config['database']}",
+            '--format=custom',
+            '--no-password'
+        ]
+        
+        # Set password via environment
+        env = os.environ.copy()
+        env['PGPASSWORD'] = db_config['password']
+        
+        # Execute dump
+        result = subprocess.run(dump_command, capture_output=True, env=env)
+        
+        if result.returncode != 0:
+            raise Exception(f"pg_dump failed: {result.stderr.decode()}")
+        
+        dump_data = result.stdout
+        
+        # Compress if enabled
+        if self.compression_enabled:
+            dump_data = gzip.compress(dump_data)
+        
+        # Calculate checksum
+        checksum = hashlib.md5(dump_data).hexdigest()
+        
+        # Store backup
+        filename = f"database_postgresql_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.dump"
+        if self.compression_enabled:
+            filename += ".gz"
+        
+        self.active_backend.store_file(filename, dump_data)
+        
+        return {
+            'filename': filename,
+            'checksum': checksum,
+            'size': len(dump_data)
+        }
+    
+    def _backup_mongodb(self) -> Dict[str, Any]:
+        """Backup MongoDB database"""
+        import subprocess
+        
+        db_config = self.config['storage']['mongodb']
+        
+        # Create dump using mongodump
+        dump_command = [
+            'mongodump',
+            '--host', f"{db_config['host']}:{db_config.get('port', 27017)}",
+            '--db', db_config['database'],
+            '--archive'
+        ]
+        
+        if db_config.get('username'):
+            dump_command.extend(['--username', db_config['username']])
+            dump_command.extend(['--password', db_config['password']])
+        
+        # Execute dump
+        result = subprocess.run(dump_command, capture_output=True)
+        
+        if result.returncode != 0:
+            raise Exception(f"mongodump failed: {result.stderr.decode()}")
+        
+        dump_data = result.stdout
+        
+        # Compress if enabled
+        if self.compression_enabled:
+            dump_data = gzip.compress(dump_data)
+        
+        # Calculate checksum
+        checksum = hashlib.md5(dump_data).hexdigest()
+        
+        # Store backup
+        filename = f"database_mongodb_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.archive"
+        if self.compression_enabled:
+            filename += ".gz"
+        
+        self.active_backend.store_file(filename, dump_data)
+        
+        return {
+            'filename': filename,
+            'checksum': checksum,
+            'size': len(dump_data)
+        }
+    
+    def _backup_redis(self) -> Dict[str, Any]:
+        """Backup Redis database"""
+        # Get Redis data using SAVE command or RDB file
+        redis_config = self.config['storage']['redis']
+        
+        try:
+            # Trigger Redis save
+            self.db.connection.save()
+            
+            # Read RDB file (this is a simplified approach)
+            # In production, you'd want to use Redis replication or other methods
+            rdb_data = b"Redis backup placeholder"  # This should read actual RDB file
+            
+            # Compress if enabled
+            if self.compression_enabled:
+                rdb_data = gzip.compress(rdb_data)
+            
+            # Calculate checksum
+            checksum = hashlib.md5(rdb_data).hexdigest()
+            
+            # Store backup
+            filename = f"database_redis_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.rdb"
+            if self.compression_enabled:
+                filename += ".gz"
+            
+            self.active_backend.store_file(filename, rdb_data)
+            
+            return {
+                'filename': filename,
+                'checksum': checksum,
+                'size': len(rdb_data)
+            }
+            
+        except Exception as e:
+            logger.error(f"Redis backup failed: {e}")
+            return None
+    
+    def _backup_memory_data(self) -> Dict[str, Any]:
+        """Backup in-memory data"""
+        if not hasattr(self.db, 'memory_store'):
+            return None
+        
+        # Serialize memory data
+        memory_data = json.dumps(self.db.memory_store, default=str, indent=2)
+        data_bytes = memory_data.encode()
+        
+        # Compress if enabled
+        if self.compression_enabled:
+            data_bytes = gzip.compress(data_bytes)
+        
+        # Calculate checksum
+        checksum = hashlib.md5(data_bytes).hexdigest()
+        
+        # Store backup
+        filename = f"database_memory_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+        if self.compression_enabled:
+            filename += ".gz"
+        
+        self.active_backend.store_file(filename, data_bytes)
+        
+        return {
+            'filename': filename,
+            'checksum': checksum,
+            'size': len(data_bytes)
+        }
+    
+    def _backup_configuration(self) -> Dict[str, Any]:
+        """Backup configuration files"""
+        try:
+            config_data = json.dumps(self.config, indent=2)
+            data_bytes = config_data.encode()
+            
+            # Compress if enabled
+            if self.compression_enabled:
+                data_bytes = gzip.compress(data_bytes)
+            
+            # Calculate checksum
+            checksum = hashlib.md5(data_bytes).hexdigest()
+            
+            # Store backup
+            filename = f"configuration_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+            if self.compression_enabled:
+                filename += ".gz"
+            
+            self.active_backend.store_file(filename, data_bytes)
+            
+            return {
+                'filename': filename,
+                'checksum': checksum,
+                'size': len(data_bytes)
+            }
+            
+        except Exception as e:
+            logger.error(f"Configuration backup failed: {e}")
+            return None
+    
+    def _backup_logs(self) -> Dict[str, Any]:
+        """Backup log files"""
+        try:
+            log_dir = self.config.get('logging', {}).get('log_dir', './logs')
+            
+            if not os.path.exists(log_dir):
+                return None
+            
+            # Create tar archive of logs
+            import tarfile
+            from io import BytesIO
+            
+            tar_buffer = BytesIO()
+            
+            with tarfile.open(fileobj=tar_buffer, mode='w:gz' if self.compression_enabled else 'w') as tar:
+                tar.add(log_dir, arcname='logs')
+            
+            data_bytes = tar_buffer.getvalue()
+            
+            # Calculate checksum
+            checksum = hashlib.md5(data_bytes).hexdigest()
+            
+            # Store backup
+            filename = f"logs_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.tar"
+            if self.compression_enabled:
+                filename += ".gz"
+            
+            self.active_backend.store_file(filename, data_bytes)
+            
+            return {
+                'filename': filename,
+                'checksum': checksum,
+                'size': len(data_bytes)
+            }
+            
+        except Exception as e:
+            logger.error(f"Logs backup failed: {e}")
+            return None
+    
+    def _cleanup_old_backups(self):
+        """Remove old backups beyond retention period"""
+        try:
+            cutoff_date = datetime.utcnow() - timedelta(days=self.retention_days)
+            backups = self.list_backups()
+            
+            for backup in backups:
+                backup_date = datetime.fromisoformat(backup['timestamp'])
+                if backup_date < cutoff_date:
+                    self.delete_backup(backup['backup_id'])
+                    
+        except Exception as e:
+            logger.error(f"Backup cleanup failed: {e}")
+    
+    def list_backups(self) -> List[Dict[str, Any]]:
+        """List available backups"""
+        try:
+            return self.active_backend.list_backups()
+        except Exception as e:
+            logger.error(f"Failed to list backups: {e}")
+            return []
+    
+    def restore_backup(self, backup_id: str) -> bool:
+        """Restore from backup"""
+        try:
+            logger.info(f"Starting restore from backup: {backup_id}")
+            
+            # Get backup manifest
+            manifest_data = self.active_backend.retrieve_file(f"{backup_id}/manifest.json")
+            manifest = json.loads(manifest_data.decode())
+            
+            # Restore each component
+            for component in manifest['components']:
+                if component == 'database':
+                    self._restore_database(backup_id, manifest)
+                elif component == 'configuration':
+                    self._restore_configuration(backup_id, manifest)
+                elif component == 'logs':
+                    self._restore_logs(backup_id, manifest)
+            
+            logger.info(f"Restore completed: {backup_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Restore failed: {e}")
+            return False
+    
+    def delete_backup(self, backup_id: str) -> bool:
+        """Delete specific backup"""
+        try:
+            self.active_backend.delete_backup(backup_id)
+            logger.info(f"Deleted backup: {backup_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete backup {backup_id}: {e}")
+            return False
+
+# Backup storage backends
+class BackupStorage:
+    """Base class for backup storage backends"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+    
+    def store_file(self, filename: str, data: bytes):
+        """Store backup file"""
+        raise NotImplementedError
+    
+    def retrieve_file(self, filename: str) -> bytes:
+        """Retrieve backup file"""
+        raise NotImplementedError
+    
+    def list_backups(self) -> List[Dict[str, Any]]:
+        """List available backups"""
+        raise NotImplementedError
+    
+    def delete_backup(self, backup_id: str):
+        """Delete backup"""
+        raise NotImplementedError
+
+class LocalBackupStorage(BackupStorage):
+    """Local filesystem backup storage"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.backup_dir = config.get('local_path', './backups')
+        os.makedirs(self.backup_dir, exist_ok=True)
+    
+    def store_file(self, filename: str, data: bytes):
+        """Store file locally"""
+        filepath = os.path.join(self.backup_dir, filename)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        with open(filepath, 'wb') as f:
+            f.write(data)
+    
+    def retrieve_file(self, filename: str) -> bytes:
+        """Retrieve file locally"""
+        filepath = os.path.join(self.backup_dir, filename)
+        
+        with open(filepath, 'rb') as f:
+            return f.read()
+    
+    def list_backups(self) -> List[Dict[str, Any]]:
+        """List local backups"""
+        backups = []
+        
+        for item in os.listdir(self.backup_dir):
+            item_path = os.path.join(self.backup_dir, item)
+            if os.path.isdir(item_path):
+                manifest_path = os.path.join(item_path, 'manifest.json')
+                if os.path.exists(manifest_path):
+                    with open(manifest_path, 'r') as f:
+                        manifest = json.load(f)
+                        backups.append(manifest)
+        
+        return sorted(backups, key=lambda x: x['timestamp'], reverse=True)
+    
+    def delete_backup(self, backup_id: str):
+        """Delete local backup"""
+        backup_dir = os.path.join(self.backup_dir, backup_id)
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir)
+
+class S3BackupStorage(BackupStorage):
+    """AWS S3 backup storage"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        s3_config = config.get('s3', {})
+        
+        self.s3_client = boto3.client(
+            's3',
+            region_name=s3_config.get('region'),
+            aws_access_key_id=s3_config.get('access_key_id'),
+            aws_secret_access_key=s3_config.get('secret_access_key')
+        )
+        
+        self.bucket_name = s3_config.get('bucket_name')
+        self.prefix = s3_config.get('prefix', 'web4ai-backups/')
+    
+    def store_file(self, filename: str, data: bytes):
+        """Store file in S3"""
+        key = f"{self.prefix}{filename}"
+        self.s3_client.put_object(Bucket=self.bucket_name, Key=key, Body=data)
+    
+    def retrieve_file(self, filename: str) -> bytes:
+        """Retrieve file from S3"""
+        key = f"{self.prefix}{filename}"
+        response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
+        return response['Body'].read()
+    
+    def list_backups(self) -> List[Dict[str, Any]]:
+        """List S3 backups"""
+        backups = []
+        
+        paginator = self.s3_client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(Bucket=self.bucket_name, Prefix=self.prefix)
+        
+        for page in pages:
+            for obj in page.get('Contents', []):
+                if obj['Key'].endswith('/manifest.json'):
+                    try:
+                        manifest_data = self.retrieve_file(obj['Key'][len(self.prefix):])
+                        manifest = json.loads(manifest_data.decode())
+                        backups.append(manifest)
+                    except:
+                        pass
+        
+        return sorted(backups, key=lambda x: x['timestamp'], reverse=True)
+    
+    def delete_backup(self, backup_id: str):
+        """Delete S3 backup"""
+        # List all objects with the backup_id prefix
+        paginator = self.s3_client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(
+            Bucket=self.bucket_name, 
+            Prefix=f"{self.prefix}{backup_id}/"
+        )
+        
+        objects_to_delete = []
+        for page in pages:
+            for obj in page.get('Contents', []):
+                objects_to_delete.append({'Key': obj['Key']})
+        
+        if objects_to_delete:
+            self.s3_client.delete_objects(
+                Bucket=self.bucket_name,
+                Delete={'Objects': objects_to_delete}
+            )
+
+class GCSBackupStorage(BackupStorage):
+    """Google Cloud Storage backup storage"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        # Implementation would use Google Cloud Storage client
+        # This is a placeholder
+        pass
+    
+    def store_file(self, filename: str, data: bytes):
+        """Store file in GCS"""
+        # Implement GCS storage
+        pass
+    
+    def retrieve_file(self, filename: str) -> bytes:
+        """Retrieve file from GCS"""
+        # Implement GCS retrieval
+        pass
+    
+    def list_backups(self) -> List[Dict[str, Any]]:
+        """List GCS backups"""
+        # Implement GCS listing
+        return []
+    
+    def delete_backup(self, backup_id: str):
+        """Delete GCS backup"""
+        # Implement GCS deletion
+        pass
