@@ -1,0 +1,418 @@
+# orchestrator_config.yaml - Production Configuration
+orchestrator:
+  id: "web4ai_production_orchestrator"
+  port: 9000
+  host: "0.0.0.0"
+  heartbeat_interval: 30
+  task_timeout: 300
+  max_retries: 3
+  auto_discovery: true
+  security_enabled: true
+  auto_start: true
+
+network:
+  discovery_endpoints:
+    - "http://node-001.web4ai.local:8080"
+    - "http://node-002.web4ai.local:8080"
+    - "http://node-003.web4ai.local:8080"
+    - "http://enhanced-node-001.web4ai.local:8090"
+    - "http://enhanced-node-002.web4ai.local:8090"
+  load_balance_algorithm: "weighted_round_robin"  # Options: round_robin, weighted_round_robin, least_connections, resource_aware, latency_optimized
+  fault_tolerance_enabled: true
+  auto_scaling_enabled: true
+  max_nodes: 100
+  min_nodes: 2
+  node_discovery_interval: 60  # seconds
+  health_check_interval: 30    # seconds
+
+performance:
+  monitoring_enabled: true
+  optimization_enabled: true
+  metrics_retention_hours: 168  # 1 week
+  performance_threshold: 0.8
+  cpu_threshold: 80
+  memory_threshold: 85
+  latency_threshold: 1000  # milliseconds
+  auto_scaling:
+    enabled: true
+    scale_up_threshold: 0.85      # Scale up when utilization > 85%
+    scale_down_threshold: 0.25    # Scale down when utilization < 25%
+    min_nodes: 2
+    max_nodes: 50
+    cooldown_period: 300          # Wait 5 minutes between scaling events
+    metrics_window: 300           # 5 minute window for scaling decisions
+
+security:
+  api_key_required: true
+  api_keys:
+    - "web4ai_admin_key_2025"
+    - "web4ai_node_key_2025"
+    - "web4ai_client_key_2025"
+  rate_limiting: true
+  max_requests_per_minute: 1000
+  max_requests_per_hour: 50000
+  encryption_enabled: true
+  audit_logging: true
+  allowed_ips:
+    - "192.168.1.0/24"
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+  cors_enabled: true
+  cors_origins:
+    - "https://web4ai-dashboard.local"
+    - "https://admin.web4ai.local"
+
+storage:
+  type: "redis"  # Options: memory, redis, mongodb, postgresql
+  redis:
+    host: "redis.web4ai.local"
+    port: 6379
+    password: "redis_password_2025"
+    db: 0
+    connection_pool_size: 10
+  backup_enabled: true
+  backup_interval_hours: 6
+  backup_retention_days: 30
+  backup_location: "/opt/web4ai/backups"
+
+websocket:
+  enabled: true
+  port: 9001
+  host: "0.0.0.0"
+  max_connections: 1000
+  ping_interval: 30
+  ping_timeout: 10
+
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s"
+  file_logging: true
+  log_file: "/var/log/web4ai/orchestrator.log"
+  max_file_size: "100MB"
+  backup_count: 5
+  console_logging: true
+  structured_logging: true
+  log_rotation: "daily"
+
+alerts:
+  enabled: true
+  email:
+    enabled: true
+    smtp_server: "smtp.web4ai.local"
+    smtp_port: 587
+    username: "alerts@web4ai.local"
+    password: "smtp_password_2025"
+    recipients:
+      - "admin@web4ai.local"
+      - "ops@web4ai.local"
+  slack:
+    enabled: true
+    webhook_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+    channel: "#web4ai-alerts"
+  thresholds:
+    node_failure_count: 2
+    high_cpu_threshold: 90
+    high_memory_threshold: 95
+    low_success_rate: 0.9
+    high_response_time: 5000  # milliseconds
+
+---
+# orchestrator_config_development.yaml - Development Configuration
+orchestrator:
+  id: "web4ai_dev_orchestrator"
+  port: 9000
+  host: "0.0.0.0"
+  heartbeat_interval: 10
+  task_timeout: 180
+  max_retries: 2
+  auto_discovery: true
+  security_enabled: false
+  auto_start: true
+
+network:
+  discovery_endpoints:
+    - "http://localhost:8080"
+    - "http://localhost:8081"
+    - "http://localhost:8082"
+    - "http://localhost:8090"
+  load_balance_algorithm: "round_robin"
+  fault_tolerance_enabled: true
+  auto_scaling_enabled: false
+  max_nodes: 10
+  min_nodes: 1
+
+performance:
+  monitoring_enabled: true
+  optimization_enabled: false
+  metrics_retention_hours: 24
+  performance_threshold: 0.9
+  cpu_threshold: 95
+  memory_threshold: 95
+  latency_threshold: 2000
+
+security:
+  api_key_required: false
+  rate_limiting: false
+  encryption_enabled: false
+  audit_logging: true
+  cors_enabled: true
+  cors_origins: ["*"]
+
+storage:
+  type: "memory"
+  backup_enabled: false
+
+websocket:
+  enabled: true
+  port: 9001
+  host: "0.0.0.0"
+  max_connections: 100
+
+logging:
+  level: "DEBUG"
+  file_logging: true
+  log_file: "./logs/orchestrator_dev.log"
+  console_logging: true
+  structured_logging: false
+
+alerts:
+  enabled: false
+
+---
+# orchestrator_config_minimal.yaml - Minimal Configuration
+orchestrator:
+  id: "web4ai_minimal_orchestrator"
+  port: 9000
+  auto_start: true
+
+network:
+  discovery_endpoints:
+    - "http://localhost:8090"
+  max_nodes: 5
+
+security:
+  api_key_required: false
+
+storage:
+  type: "memory"
+
+logging:
+  level: "INFO"
+  console_logging: true
+
+---
+# docker-compose.yml - Complete Stack
+version: '3.8'
+
+services:
+  orchestrator:
+    build: .
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - ORCHESTRATOR_CONFIG=/config/orchestrator_config.yaml
+      - PYTHONPATH=/app
+    volumes:
+      - ./orchestrator_config.yaml:/config/orchestrator_config.yaml
+      - ./logs:/var/log/web4ai
+      - ./backups:/opt/web4ai/backups
+    depends_on:
+      - redis
+      - prometheus
+    networks:
+      - web4ai-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass redis_password_2025
+    volumes:
+      - redis_data:/data
+    networks:
+      - web4ai-network
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    networks:
+      - web4ai-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - web4ai-network
+    restart: unless-stopped
+
+  enhanced-node-1:
+    build: ./enhanced_node
+    ports:
+      - "8090:8090"
+    environment:
+      - NODE_ID=enhanced-node-001
+      - ORCHESTRATOR_URL=http://orchestrator:9000
+      - NODE_PORT=8090
+    volumes:
+      - ./enhanced_node/logs:/app/logs
+    depends_on:
+      - orchestrator
+    networks:
+      - web4ai-network
+    restart: unless-stopped
+
+  enhanced-node-2:
+    build: ./enhanced_node
+    ports:
+      - "8091:8090"
+    environment:
+      - NODE_ID=enhanced-node-002
+      - ORCHESTRATOR_URL=http://orchestrator:9000
+      - NODE_PORT=8090
+    volumes:
+      - ./enhanced_node/logs:/app/logs
+    depends_on:
+      - orchestrator
+    networks:
+      - web4ai-network
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  web4ai-network:
+    driver: bridge
+
+---
+# prometheus.yml - Monitoring Configuration
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "web4ai_rules.yml"
+
+scrape_configs:
+  - job_name: 'orchestrator'
+    static_configs:
+      - targets: ['orchestrator:9000']
+    metrics_path: '/api/v1/metrics/prometheus'
+    scrape_interval: 10s
+
+  - job_name: 'enhanced-nodes'
+    static_configs:
+      - targets: ['enhanced-node-1:8091', 'enhanced-node-2:8091']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+---
+# web4ai_rules.yml - Alerting Rules
+groups:
+  - name: web4ai_alerts
+    rules:
+      - alert: OrchestratorDown
+        expr: up{job="orchestrator"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Web4AI Orchestrator is down"
+          description: "The orchestrator has been down for more than 1 minute"
+
+      - alert: HighNodeFailureRate
+        expr: rate(web4ai_node_failures_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High node failure rate detected"
+          description: "Node failure rate is {{ $value }} failures per second"
+
+      - alert: LowSuccessRate
+        expr: web4ai_task_success_rate < 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low task success rate"
+          description: "Task success rate is {{ $value }}"
+
+      - alert: HighNetworkUtilization
+        expr: web4ai_network_utilization > 0.9
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High network utilization"
+          description: "Network utilization is {{ $value }}"
+
+---
+# .env - Environment Variables
+# Orchestrator Configuration
+ORCHESTRATOR_ID=web4ai_main_orchestrator
+ORCHESTRATOR_HOST=0.0.0.0
+ORCHESTRATOR_PORT=9000
+ORCHESTRATOR_CONFIG=./orchestrator_config.yaml
+
+# Security
+API_KEY=web4ai_admin_key_2025
+SECURITY_ENABLED=true
+
+# Storage
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=redis_password_2025
+REDIS_DB=0
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FILE=./logs/orchestrator.log
+
+# Monitoring
+PROMETHEUS_ENABLED=true
+GRAFANA_ENABLED=true
+METRICS_RETENTION_HOURS=168
+
+# Alerts
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK
+EMAIL_SMTP_SERVER=smtp.web4ai.local
+EMAIL_USERNAME=alerts@web4ai.local
+EMAIL_PASSWORD=smtp_password_2025
+
+# Development
+DEVELOPMENT_MODE=false
+DEBUG_MODE=false
