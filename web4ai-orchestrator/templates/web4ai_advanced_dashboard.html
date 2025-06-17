@@ -687,6 +687,16 @@
             margin-top: 4px;
             text-align: right;
         }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
     </style>
 </head>
 <body>
@@ -1168,6 +1178,16 @@
                 }
             }
 
+            cleanup() {
+                // Clean up intervals and connections
+                if (this.pollingInterval) {
+                    clearInterval(this.pollingInterval);
+                }
+                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    this.websocket.close();
+                }
+            }
+
             updateDashboard(data) {
                 this.data = { ...this.data, ...data };
                 this.updateMetricsCards(data);
@@ -1257,29 +1277,6 @@
 
                 if (nodesList.children.length === 0) {
                     nodesList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">No nodes available</div>';
-                }
-            }
-
-            cleanup() {
-                // Clean up intervals and connections
-                if (this.pollingInterval) {
-                    clearInterval(this.pollingInterval);
-                }
-                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                    this.websocket.close();
-                }
-            } 15,
-                            gpu_usage: Math.random() * 60 + 5,
-                            agents_count: Math.floor(Math.random() * 5) + 1,
-                            agents: this.generateSampleAgents(Math.floor(Math.random() * 5) + 1)
-                        };
-                        const nodeDiv = this.createNodeElement(sampleNode);
-                        nodesList.appendChild(nodeDiv);
-                    }
-                }
-
-                if (nodesList.children.length === 0) {
-                    nodesList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">No nodes registered</div>';
                 }
             }
 
@@ -1968,78 +1965,6 @@
             }
         }
 
-        // Initialize dashboard when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            // Add error handling for dashboard initialization
-            try {
-                dashboard = new DashboardState();
-                
-                // Add connection status monitoring
-                const statusElement = document.getElementById('connectionStatus');
-                const wsIndicator = document.getElementById('wsIndicator');
-                
-                // Monitor for API availability
-                const checkConnection = async () => {
-                    try {
-                        const response = await fetch(`${dashboard.orchestratorUrl}/api/v1/health`, {
-                            method: 'GET',
-                            signal: AbortSignal.timeout(3000)
-                        });
-                        
-                        if (response.ok) {
-                            statusElement.textContent = 'API Connected';
-                            wsIndicator.className = 'ws-indicator';
-                        } else {
-                            statusElement.textContent = 'API Issues';
-                            wsIndicator.className = 'ws-indicator disconnected';
-                        }
-                    } catch (error) {
-                        statusElement.textContent = 'API Offline';
-                        wsIndicator.className = 'ws-indicator disconnected';
-                    }
-                };
-                
-                // Check connection every 30 seconds
-                setInterval(checkConnection, 30000);
-                
-                console.log('✅ Dashboard initialized successfully');
-            } catch (error) {
-                console.error('❌ Failed to initialize dashboard:', error);
-                
-                // Show error message to user
-                const errorDiv = document.createElement('div');
-                errorDiv.style.cssText = `
-                    position: fixed;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%);
-                    background: #fef2f2;
-                    color: #dc2626;
-                    padding: 20px;
-                    border-radius: 8px;
-                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-                    z-index: 2000;
-                    max-width: 400px;
-                    text-align: center;
-                `;
-                errorDiv.innerHTML = `
-                    <h3>Dashboard Error</h3>
-                    <p>Failed to initialize the dashboard. Please refresh the page.</p>
-                    <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: #dc2626; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                        Refresh Page
-                    </button>
-                `;
-                document.body.appendChild(errorDiv);
-            }
-        });
-
-        // Add cleanup on page unload
-        window.addEventListener('beforeunload', function() {
-            if (dashboard && dashboard.cleanup) {
-                dashboard.cleanup();
-            }
-        });
-
         function refreshDashboard() {
             if (dashboard) {
                 dashboard.refreshData();
@@ -2084,68 +2009,118 @@
             }
         }
 
-        // Task form submission
+        // Initialize dashboard when page loads
         document.addEventListener('DOMContentLoaded', function() {
-            document.getElementById('taskForm').addEventListener('submit', async (e) => {
-                e.preventDefault();
+            // Add error handling for dashboard initialization
+            try {
+                dashboard = new DashboardState();
                 
-                if (!dashboard) {
-                    alert('Dashboard not initialized yet, please wait...');
-                    return;
-                }
+                // Add connection status monitoring
+                const statusElement = document.getElementById('connectionStatus');
+                const wsIndicator = document.getElementById('wsIndicator');
                 
-                const taskData = {
-                    task_type: document.getElementById('taskType').value,
-                    priority: parseInt(document.getElementById('taskPriority').value),
-                    input_data: JSON.parse(document.getElementById('taskInput').value || '{}'),
-                    timeout: parseInt(document.getElementById('taskTimeout').value)
-                };
-
-                try {
-                    const response = await fetch(`${dashboard.orchestratorUrl}/api/v1/tasks`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(taskData)
-                    });
-
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        dashboard.showNotification(`Task submitted: ${result.task_id}`, 'success');
-                        closeTaskModal();
-                        document.getElementById('taskForm').reset();
-                    } else {
-                        dashboard.showNotification('Task submission failed', 'error');
+                // Monitor for API availability
+                const checkConnection = async () => {
+                    try {
+                        const response = await fetch(`${dashboard.orchestratorUrl}/api/v1/health`, {
+                            method: 'GET',
+                            signal: AbortSignal.timeout(3000)
+                        });
+                        
+                        if (response.ok) {
+                            statusElement.textContent = 'API Connected';
+                            wsIndicator.className = 'ws-indicator';
+                        } else {
+                            statusElement.textContent = 'API Issues';
+                            wsIndicator.className = 'ws-indicator disconnected';
+                        }
+                    } catch (error) {
+                        statusElement.textContent = 'API Offline';
+                        wsIndicator.className = 'ws-indicator disconnected';
                     }
-                } catch (error) {
-                    dashboard.showNotification('Task submission error', 'error');
-                }
-            });
+                };
+                
+                // Check connection every 30 seconds
+                setInterval(checkConnection, 30000);
+                
+                console.log('✅ Dashboard initialized successfully');
+
+                // Task form submission
+                document.getElementById('taskForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    
+                    const taskData = {
+                        task_type: document.getElementById('taskType').value,
+                        priority: parseInt(document.getElementById('taskPriority').value),
+                        input_data: JSON.parse(document.getElementById('taskInput').value || '{}'),
+                        timeout: parseInt(document.getElementById('taskTimeout').value)
+                    };
+
+                    try {
+                        const response = await fetch(`${dashboard.orchestratorUrl}/api/v1/tasks`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(taskData)
+                        });
+
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            dashboard.showNotification(`Task submitted: ${result.task_id}`, 'success');
+                            closeTaskModal();
+                            document.getElementById('taskForm').reset();
+                        } else {
+                            dashboard.showNotification('Task submission failed', 'error');
+                        }
+                    } catch (error) {
+                        dashboard.showNotification('Task submission error', 'error');
+                    }
+                });
+
+                // Close modal when clicking outside
+                window.onclick = function(event) {
+                    const modal = document.getElementById('taskModal');
+                    if (event.target === modal) {
+                        closeTaskModal();
+                    }
+                };
+                
+            } catch (error) {
+                console.error('❌ Failed to initialize dashboard:', error);
+                
+                // Show error message to user
+                const errorDiv = document.createElement('div');
+                errorDiv.style.cssText = `
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: #fef2f2;
+                    color: #dc2626;
+                    padding: 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+                    z-index: 2000;
+                    max-width: 400px;
+                    text-align: center;
+                `;
+                errorDiv.innerHTML = `
+                    <h3>Dashboard Error</h3>
+                    <p>Failed to initialize the dashboard. Please refresh the page.</p>
+                    <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: #dc2626; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        Refresh Page
+                    </button>
+                `;
+                document.body.appendChild(errorDiv);
+            }
         });
 
-        // Close modal when clicking outside
-        document.addEventListener('DOMContentLoaded', function() {
-            window.onclick = function(event) {
-                const modal = document.getElementById('taskModal');
-                if (event.target === modal) {
-                    closeTaskModal();
-                }
-            };
+        // Add cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            if (dashboard && dashboard.cleanup) {
+                dashboard.cleanup();
+            }
         });
-
-        // Add CSS animations
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes slideIn {
-                from { transform: translateX(100%); opacity: 0; }
-                to { transform: translateX(0); opacity: 1; }
-            }
-            @keyframes slideOut {
-                from { transform: translateX(0); opacity: 1; }
-                to { transform: translateX(100%); opacity: 0; }
-            }
-        `;
-        document.head.appendChild(style);
     </script>
 </body>
 </html>
