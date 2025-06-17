@@ -557,6 +557,7 @@
         let networkData = { nodes: [], agents: [] };
         let svg, simulation;
         let socket;
+        let isOfflineMode = false;
 
         // Initialize dashboard
         document.addEventListener('DOMContentLoaded', function() {
@@ -568,18 +569,106 @@
             setInterval(loadDashboardData, 30000);
         });
 
+        // Helper functions for connection status and error handling
+        function updateConnectionStatus(status, type) {
+            const statusElement = document.getElementById('connectionStatus');
+            const statusDot = statusElement.parentElement.querySelector('.status-dot');
+            
+            statusElement.textContent = status;
+            
+            // Update status dot color based on type
+            if (type === 'success') {
+                statusDot.style.background = 'var(--success-color)';
+            } else if (type === 'error') {
+                statusDot.style.background = 'var(--error-color)';
+            } else {
+                statusDot.style.background = 'var(--warning-color)';
+            }
+        }
+
+        function showConnectionError(message) {
+            let errorContainer = document.getElementById('connectionError');
+            if (!errorContainer) {
+                errorContainer = document.createElement('div');
+                errorContainer.id = 'connectionError';
+                errorContainer.style.cssText = `
+                    position: fixed;
+                    top: 80px;
+                    left: 20px;
+                    right: 20px;
+                    background: var(--error-color);
+                    color: white;
+                    padding: 15px 20px;
+                    border-radius: 8px;
+                    box-shadow: var(--shadow-lg);
+                    z-index: 1000;
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                `;
+                document.body.appendChild(errorContainer);
+            }
+            
+            errorContainer.innerHTML = `
+                <i class="fas fa-exclamation-triangle"></i>
+                <div style="flex: 1;">
+                    <strong>Connection Error:</strong> ${message}
+                </div>
+                <button onclick="hideConnectionError()" style="background: rgba(255,255,255,0.2); border: none; color: white; padding: 5px 10px; border-radius: 4px; cursor: pointer;">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+            
+            isOfflineMode = true;
+        }
+
+        function hideConnectionError() {
+            const errorContainer = document.getElementById('connectionError');
+            if (errorContainer) {
+                errorContainer.remove();
+            }
+            isOfflineMode = false;
+        }
+
+        function showLoadingState() {
+            const statsCards = document.querySelectorAll('.stat-value');
+            statsCards.forEach(card => {
+                if (!card.querySelector('.loading')) {
+                    card.innerHTML = '<div class="loading"></div>';
+                }
+            });
+        }
+
+        function hideLoadingState() {
+            // Loading state will be replaced by actual data
+        }
+
         function initializeWebSocket() {
             try {
-                socket = io();
+                // Try to connect with error handling
+                socket = io({
+                    timeout: 5000,
+                    autoConnect: true,
+                    reconnection: true,
+                    reconnectionAttempts: 3,
+                    reconnectionDelay: 2000
+                });
                 
                 socket.on('connect', function() {
                     console.log('Connected to server');
-                    document.getElementById('connectionStatus').textContent = 'Connected';
+                    updateConnectionStatus('Connected', 'success');
+                    hideConnectionError();
                 });
 
                 socket.on('disconnect', function() {
                     console.log('Disconnected from server');
-                    document.getElementById('connectionStatus').textContent = 'Disconnected';
+                    updateConnectionStatus('Disconnected', 'error');
+                });
+
+                socket.on('connect_error', function(error) {
+                    console.error('Connection error:', error);
+                    updateConnectionStatus('Connection Failed', 'error');
+                    showConnectionError('WebSocket connection failed. Server may be down or misconfigured.');
                 });
 
                 socket.on('agent_update', function(data) {
@@ -590,7 +679,9 @@
                     updateNetworkTopology(data);
                 });
             } catch (error) {
-                console.log('WebSocket not available, using polling mode');
+                console.error('WebSocket initialization error:', error);
+                updateConnectionStatus('WebSocket Error', 'error');
+                showConnectionError('WebSocket not available. Running in offline mode.');
             }
         }
 
@@ -626,20 +717,58 @@
         }
 
         async function loadDashboardData() {
+            showLoadingState();
+            
             try {
-                // Load agents data from API
-                const response = await fetch('/api/v3/dashboard');
+                // Try to load data from the server API
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+                
+                const response = await fetch('/api/v3/dashboard', {
+                    signal: controller.signal,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
                 
                 if (data.success) {
+                    hideLoadingState();
+                    hideConnectionError();
                     updateStats(data);
                     updateAgentsList(data.agents || []);
                     updateNetworkData(data);
                     updateOperations(data);
+                    updateConnectionStatus('API Connected', 'success');
+                } else {
+                    throw new Error(data.error || 'API returned unsuccessful response');
                 }
+                
             } catch (error) {
+                hideLoadingState();
                 console.error('Error loading dashboard data:', error);
-                // Load demo data if API is unavailable
+                
+                let errorMessage = 'Failed to connect to server API';
+                if (error.name === 'AbortError') {
+                    errorMessage = 'API request timeout - server may be overloaded';
+                } else if (error.message.includes('500')) {
+                    errorMessage = 'Server internal error - check server logs';
+                } else if (error.message.includes('fetch')) {
+                    errorMessage = 'Network error - server may be down';
+                }
+                
+                showConnectionError(errorMessage + '. Using demo data.');
+                updateConnectionStatus('API Error', 'error');
+                
+                // Load demo data as fallback
                 loadDemoData();
             }
         }
@@ -651,13 +780,25 @@
             document.getElementById('totalAgents').textContent = agents.length;
             document.getElementById('activeNodes').textContent = stats.active_nodes || agents.filter(a => a.status === 'online').length;
             document.getElementById('totalInferences').textContent = stats.total_inferences || 0;
-            document.getElementById('networkHealth').textContent = Math.round((stats.network_health || 1) * 100) + '%';
+            
+            // Network health with offline mode indicator
+            const healthElement = document.getElementById('networkHealth');
+            const healthValue = Math.round((stats.network_health || (isOfflineMode ? 0.3 : 1)) * 100);
+            healthElement.innerHTML = `${healthValue}%${isOfflineMode ? '<span class="demo-mode-badge">DEMO</span>' : ''}`;
             
             // Update change indicators
             document.getElementById('agentsChange').textContent = `+${stats.agents_today || 0} today`;
-            document.getElementById('nodesChange').textContent = `${stats.nodes_online || 0} online`;
+            document.getElementById('nodesChange').textContent = `${stats.nodes_online || stats.active_nodes || 0} online`;
             document.getElementById('inferencesChange').textContent = `+${stats.inferences_today || 0} today`;
-            document.getElementById('healthChange').textContent = stats.network_health >= 0.9 ? 'Optimal' : 'Good';
+            
+            const healthChange = document.getElementById('healthChange');
+            if (isOfflineMode) {
+                healthChange.textContent = 'Offline Mode';
+                healthChange.className = 'stat-change negative';
+            } else {
+                healthChange.textContent = stats.network_health >= 0.9 ? 'Optimal' : 'Good';
+                healthChange.className = 'stat-change positive';
+            }
         }
 
         function updateAgentsList(agents) {
@@ -667,7 +808,21 @@
             agentCount.textContent = `${agents.length} agents`;
             
             if (agents.length === 0) {
-                agentsList.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 20px;">No agents available</div>';
+                if (isOfflineMode) {
+                    agentsList.innerHTML = `
+                        <div style="text-align: center; color: var(--text-muted); padding: 20px;">
+                            <i class="fas fa-wifi" style="font-size: 2em; margin-bottom: 10px; color: var(--error-color);"></i>
+                            <div>No agents available - Server offline</div>
+                            <div style="font-size: 0.9em; margin-top: 10px;">
+                                <button onclick="runServerDiagnostics()" style="background: var(--info-color); color: white; border: none; padding: 8px 15px; border-radius: 6px; cursor: pointer;">
+                                    <i class="fas fa-stethoscope"></i> Run Diagnostics
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    agentsList.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 20px;">No agents registered</div>';
+                }
                 return;
             }
 
@@ -946,11 +1101,227 @@
         }
 
         function showSettings() {
-            alert('Settings panel - Implementation pending');
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 2000;
+            `;
+            
+            modal.innerHTML = `
+                <div style="background: var(--bg-primary); padding: 30px; border-radius: 12px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
+                    <h2 style="margin-bottom: 20px; color: var(--text-primary);">
+                        <i class="fas fa-cog"></i> Dashboard Settings
+                    </h2>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="color: var(--text-secondary); margin-bottom: 10px;">Connection Status</h3>
+                        <div style="padding: 10px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 10px;">
+                            <strong>Current Status:</strong> ${isOfflineMode ? 'Offline Mode' : 'Connected'}<br>
+                            <strong>WebSocket:</strong> ${socket && socket.connected ? 'Connected' : 'Disconnected'}<br>
+                            <strong>API:</strong> ${isOfflineMode ? 'Unavailable' : 'Available'}
+                        </div>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="color: var(--text-secondary); margin-bottom: 10px;">Troubleshooting</h3>
+                        <button onclick="runServerDiagnostics(); closeModal()" 
+                                style="background: var(--info-color); color: white; border: none; padding: 10px 15px; border-radius: 6px; cursor: pointer; margin-right: 10px;">
+                            <i class="fas fa-stethoscope"></i> Run Diagnostics
+                        </button>
+                        <button onclick="loadDashboardData(); closeModal()" 
+                                style="background: var(--primary-color); color: white; border: none; padding: 10px 15px; border-radius: 6px; cursor: pointer; margin-right: 10px;">
+                            <i class="fas fa-sync-alt"></i> Retry Connection
+                        </button>
+                        <button onclick="showTroubleshootingInfo(); closeModal()" 
+                                style="background: var(--warning-color); color: white; border: none; padding: 10px 15px; border-radius: 6px; cursor: pointer;">
+                            <i class="fas fa-question-circle"></i> Help
+                        </button>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="color: var(--text-secondary); margin-bottom: 10px;">Dashboard Options</h3>
+                        <label style="display: block; margin-bottom: 10px;">
+                            <input type="checkbox" id="autoRefresh" checked> Auto-refresh every 30 seconds
+                        </label>
+                        <label style="display: block; margin-bottom: 10px;">
+                            <input type="checkbox" id="showOfflineAgents" checked> Show offline agents
+                        </label>
+                        <label style="display: block; margin-bottom: 10px;">
+                            <input type="checkbox" id="enableNotifications"> Enable notifications
+                        </label>
+                    </div>
+                    
+                    <div style="text-align: right;">
+                        <button onclick="closeModal()" 
+                                style="background: var(--text-secondary); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            modal.onclick = (e) => {
+                if (e.target === modal) closeModal();
+            };
+            
+            window.closeModal = () => modal.remove();
+            document.body.appendChild(modal);
+        }
+
+        function showDiagnosticsModal(diagnostics) {
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 2000;
+            `;
+            
+            const testResults = diagnostics.tests.map(test => 
+                `<div style="margin: 10px 0; padding: 10px; background: var(--bg-secondary); border-radius: 6px;">
+                    <strong>${test.test}:</strong> 
+                    <span style="color: ${test.status === 'PASS' ? 'var(--success-color)' : 'var(--error-color)'}">
+                        ${test.status}
+                    </span><br>
+                    <small style="color: var(--text-secondary);">${test.details}</small>
+                </div>`
+            ).join('');
+            
+            modal.innerHTML = `
+                <div style="background: var(--bg-primary); padding: 30px; border-radius: 12px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
+                    <h2 style="margin-bottom: 20px; color: var(--text-primary);">
+                        <i class="fas fa-stethoscope"></i> Server Diagnostics
+                    </h2>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <strong>Timestamp:</strong> ${diagnostics.timestamp}
+                    </div>
+                    
+                    ${testResults}
+                    
+                    <div style="margin-top: 20px; padding: 15px; background: var(--bg-secondary); border-radius: 8px;">
+                        <h3 style="margin-bottom: 10px;">Common Solutions:</h3>
+                        <ul style="margin: 0; padding-left: 20px; color: var(--text-secondary);">
+                            <li>Check if the server is running on the correct port</li>
+                            <li>Verify Flask-SocketIO is installed: <code>pip install Flask-SocketIO</code></li>
+                            <li>Check server logs for import errors or configuration issues</li>
+                            <li>Ensure all required dependencies are installed</li>
+                            <li>Try restarting the server: <code>python main.py</code></li>
+                        </ul>
+                    </div>
+                    
+                    <div style="text-align: right; margin-top: 20px;">
+                        <button onclick="closeModal()" 
+                                style="background: var(--primary-color); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            modal.onclick = (e) => {
+                if (e.target === modal) closeModal();
+            };
+            
+            window.closeModal = () => modal.remove();
+            document.body.appendChild(modal);
+        }
+
+        function showTroubleshootingInfo() {
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 2000;
+            `;
+            
+            modal.innerHTML = `
+                <div style="background: var(--bg-primary); padding: 30px; border-radius: 12px; max-width: 700px; width: 90%; max-height: 80vh; overflow-y: auto;">
+                    <h2 style="margin-bottom: 20px; color: var(--text-primary);">
+                        <i class="fas fa-question-circle"></i> Troubleshooting Guide
+                    </h2>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="color: var(--error-color);">🔥 Server 500 Errors</h3>
+                        <p>If you're seeing 500 Internal Server Errors:</p>
+                        <ol style="margin-left: 20px; color: var(--text-secondary);">
+                            <li>Check server console for error messages</li>
+                            <li>Verify all dependencies: <code>pip install -r requirements.txt</code></li>
+                            <li>Check for import errors in server modules</li>
+                            <li>Ensure database is accessible and properly initialized</li>
+                            <li>Try running: <code>python setup_and_run.py</code></li>
+                        </ol>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="color: var(--warning-color);">🔌 WebSocket Connection Issues</h3>
+                        <p>For WebSocket connection problems:</p>
+                        <ol style="margin-left: 20px; color: var(--text-secondary);">
+                            <li>Install Flask-SocketIO: <code>pip install Flask-SocketIO</code></li>
+                            <li>Check if server is running on correct port (usually 5000 or 9000)</li>
+                            <li>Verify CORS settings in server configuration</li>
+                            <li>Check browser developer tools for specific error messages</li>
+                        </ol>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="color: var(--info-color);">🚀 Quick Start Commands</h3>
+                        <div style="background: var(--bg-secondary); padding: 15px; border-radius: 8px; font-family: monospace;">
+                            # Enhanced Node Server<br>
+                            cd enhanced_node<br>
+                            python setup_and_run.py<br><br>
+                            
+                            # Or manually:<br>
+                            pip install -r requirements.txt<br>
+                            python main.py<br><br>
+                            
+                            # Check logs:<br>
+                            tail -f logs/enhanced_node_server.log
+                        </div>
+                    </div>
+                    
+                    <div style="text-align: right;">
+                        <button onclick="closeModal()" 
+                                style="background: var(--primary-color); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            modal.onclick = (e) => {
+                if (e.target === modal) closeModal();
+            };
+            
+            window.closeModal = () => modal.remove();
+            document.body.appendChild(modal);
         }
 
         // Demo data for when API is not available
         function loadDemoData() {
+            console.log('Loading demo data due to API unavailability');
+            
             const demoData = {
                 success: true,
                 agents: [
@@ -962,26 +1333,57 @@
                         uptime: 3600,
                         cpu_usage: 0.45,
                         memory_usage: 0.62,
-                        capabilities: ['ai_inference', 'blockchain_ops', 'task_control']
+                        capabilities: ['ai_inference', 'blockchain_ops', 'task_control'],
+                        api_urls: {
+                            dashboard: 'http://localhost:8080'
+                        }
                     },
                     {
                         agent_id: 'enhanced_node_1',
                         host: 'localhost',
                         port: 5000,
-                        status: 'online',
+                        status: 'offline',
                         uptime: 7200,
                         cpu_usage: 0.23,
                         memory_usage: 0.34,
-                        capabilities: ['agent_management', 'monitoring', 'websocket']
+                        capabilities: ['agent_management', 'monitoring', 'websocket'],
+                        api_urls: {
+                            dashboard: 'http://localhost:5000'
+                        }
+                    },
+                    {
+                        agent_id: 'demo_agent_offline',
+                        host: 'demo.local',
+                        port: 9000,
+                        status: 'offline',
+                        uptime: 0,
+                        cpu_usage: 0,
+                        memory_usage: 0,
+                        capabilities: ['demo'],
+                        api_urls: {
+                            dashboard: 'http://demo.local:9000'
+                        }
                     }
                 ],
                 stats: {
-                    active_nodes: 2,
+                    active_nodes: 1,
                     total_inferences: 1247,
-                    network_health: 0.95,
+                    network_health: 0.65, // Lower due to offline mode
                     cpu_usage: 0.34,
                     memory_usage: 0.48,
-                    uptime: 86400
+                    uptime: 86400,
+                    agents_today: 3,
+                    nodes_online: 1,
+                    inferences_today: 124
+                },
+                ai_summary: {
+                    active_models: ['Demo GPT-4', 'Demo BERT', 'Demo Transformer']
+                },
+                blockchain_summary: {
+                    wallets: [
+                        { currency: 'ETH', balance: '0.00 (Demo)', value: '$0' },
+                        { currency: 'PAIN', balance: '100.00 (Demo)', value: '$50' }
+                    ]
                 }
             };
             
@@ -989,6 +1391,87 @@
             updateAgentsList(demoData.agents);
             updateNetworkData(demoData);
             updateOperations(demoData);
+            
+            // Add demo mode indicator
+            addDemoModeIndicator();
+        }
+
+        function addDemoModeIndicator() {
+            let demoIndicator = document.getElementById('demoIndicator');
+            if (!demoIndicator) {
+                demoIndicator = document.createElement('div');
+                demoIndicator.id = 'demoIndicator';
+                demoIndicator.style.cssText = `
+                    position: fixed;
+                    bottom: 20px;
+                    right: 20px;
+                    background: var(--warning-color);
+                    color: white;
+                    padding: 10px 15px;
+                    border-radius: 8px;
+                    font-size: 0.9em;
+                    box-shadow: var(--shadow);
+                    z-index: 1000;
+                `;
+                demoIndicator.innerHTML = `
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <strong>Demo Mode</strong> - Server offline
+                `;
+                document.body.appendChild(demoIndicator);
+            }
+        }
+
+        // Server diagnostics
+        function runServerDiagnostics() {
+            console.log('Running server diagnostics...');
+            
+            const diagnostics = {
+                timestamp: new Date().toISOString(),
+                tests: []
+            };
+
+            // Test basic connectivity
+            fetch('/api/v3/dashboard', { method: 'HEAD' })
+                .then(response => {
+                    diagnostics.tests.push({
+                        test: 'API Connectivity',
+                        status: response.ok ? 'PASS' : 'FAIL',
+                        details: `HTTP ${response.status}: ${response.statusText}`
+                    });
+                })
+                .catch(error => {
+                    diagnostics.tests.push({
+                        test: 'API Connectivity', 
+                        status: 'FAIL',
+                        details: error.message
+                    });
+                });
+
+            // Test WebSocket
+            const wsTest = io({ autoConnect: false, timeout: 3000 });
+            wsTest.on('connect', () => {
+                diagnostics.tests.push({
+                    test: 'WebSocket Connectivity',
+                    status: 'PASS',
+                    details: 'WebSocket connection successful'
+                });
+                wsTest.disconnect();
+            });
+            
+            wsTest.on('connect_error', (error) => {
+                diagnostics.tests.push({
+                    test: 'WebSocket Connectivity',
+                    status: 'FAIL', 
+                    details: error.message
+                });
+            });
+            
+            wsTest.connect();
+            
+            setTimeout(() => {
+                console.log('Diagnostics Results:', diagnostics);
+                showDiagnosticsModal(diagnostics);
+            }, 5000);
         }
 
         // Handle window resize
