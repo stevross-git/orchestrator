@@ -4,8 +4,7 @@ Web4AI Orchestrator API Server
 RESTful API interface and configuration management for the orchestrator
 """
 
-from flask import Flask, request, jsonify, g, send_from_directory
-from flask_cors import CORS
+from flask import Flask, request, jsonify, g, send_from_directory, render_templatefrom flask_cors import CORS
 import asyncio
 import threading
 import json
