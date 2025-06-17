@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web4AI Orchestrator - Enhanced Dashboard</title>
+    
+    <!-- Add a simple favicon to prevent 404 errors -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🚀%3C/text%3E%3C/svg%3E">
+    
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
     <style>
@@ -1966,7 +1970,74 @@
 
         // Initialize dashboard when page loads
         document.addEventListener('DOMContentLoaded', function() {
-            dashboard = new DashboardState();
+            // Add error handling for dashboard initialization
+            try {
+                dashboard = new DashboardState();
+                
+                // Add connection status monitoring
+                const statusElement = document.getElementById('connectionStatus');
+                const wsIndicator = document.getElementById('wsIndicator');
+                
+                // Monitor for API availability
+                const checkConnection = async () => {
+                    try {
+                        const response = await fetch(`${dashboard.orchestratorUrl}/api/v1/health`, {
+                            method: 'GET',
+                            signal: AbortSignal.timeout(3000)
+                        });
+                        
+                        if (response.ok) {
+                            statusElement.textContent = 'API Connected';
+                            wsIndicator.className = 'ws-indicator';
+                        } else {
+                            statusElement.textContent = 'API Issues';
+                            wsIndicator.className = 'ws-indicator disconnected';
+                        }
+                    } catch (error) {
+                        statusElement.textContent = 'API Offline';
+                        wsIndicator.className = 'ws-indicator disconnected';
+                    }
+                };
+                
+                // Check connection every 30 seconds
+                setInterval(checkConnection, 30000);
+                
+                console.log('✅ Dashboard initialized successfully');
+            } catch (error) {
+                console.error('❌ Failed to initialize dashboard:', error);
+                
+                // Show error message to user
+                const errorDiv = document.createElement('div');
+                errorDiv.style.cssText = `
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: #fef2f2;
+                    color: #dc2626;
+                    padding: 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+                    z-index: 2000;
+                    max-width: 400px;
+                    text-align: center;
+                `;
+                errorDiv.innerHTML = `
+                    <h3>Dashboard Error</h3>
+                    <p>Failed to initialize the dashboard. Please refresh the page.</p>
+                    <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: #dc2626; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        Refresh Page
+                    </button>
+                `;
+                document.body.appendChild(errorDiv);
+            }
+        });
+
+        // Add cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            if (dashboard && dashboard.cleanup) {
+                dashboard.cleanup();
+            }
         });
 
         function refreshDashboard() {
