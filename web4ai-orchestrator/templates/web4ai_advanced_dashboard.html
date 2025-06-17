@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web4AI Orchestrator - Advanced Dashboard</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
     <style>
         * {
@@ -638,8 +638,9 @@
         // Dashboard State Management
         class DashboardState {
             constructor() {
-                this.orchestratorUrl = 'http://localhost:9000';
-                this.websocket = null;
+                // Auto-detect URLs based on current location
+                this.orchestratorUrl = window.location.origin;
+                this.websocketUrl = `ws://${window.location.hostname}:9001`;
                 this.autoRefresh = true;
                 this.refreshInterval = 5000;
                 this.charts = {};
@@ -661,7 +662,12 @@
 
             setupWebSocket() {
                 try {
-                    this.websocket = new WebSocket('ws://localhost:9001');
+                    // Try secure WebSocket first if page is HTTPS
+                    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${wsProtocol}//${window.location.hostname}:9001`;
+                    
+                    console.log('🔌 Attempting WebSocket connection to:', wsUrl);
+                    this.websocket = new WebSocket(wsUrl);
                     
                     this.websocket.onopen = () => {
                         console.log('🔌 WebSocket connected');
@@ -679,12 +685,12 @@
                         document.getElementById('wsIndicator').className = 'ws-indicator disconnected';
                         document.getElementById('connectionStatus').textContent = 'Disconnected';
                         
-                        // Attempt reconnection
+                        // Attempt reconnection after 5 seconds
                         setTimeout(() => this.setupWebSocket(), 5000);
                     };
 
                     this.websocket.onerror = (error) => {
-                        console.error('WebSocket error:', error);
+                        console.log('WebSocket error:', error);
                     };
                 } catch (error) {
                     console.error('Failed to setup WebSocket:', error);
@@ -1204,22 +1210,32 @@
             }
         }
 
-        // Global functions for UI interactions
-        const dashboard = new DashboardState();
+        // Global dashboard instance
+        let dashboard = null;
 
+        // Initialize dashboard when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            dashboard = new DashboardState();
+        });
+
+        // Global functions for UI interactions
         function refreshDashboard() {
-            dashboard.refreshData();
-            dashboard.showNotification('Dashboard refreshed', 'success');
+            if (dashboard) {
+                dashboard.refreshData();
+                dashboard.showNotification('Dashboard refreshed', 'success');
+            }
         }
 
         function toggleAutoRefresh() {
-            dashboard.autoRefresh = !dashboard.autoRefresh;
-            const button = event.target;
-            button.textContent = dashboard.autoRefresh ? '⏸️ Pause Auto-refresh' : '▶️ Resume Auto-refresh';
-            dashboard.showNotification(
-                dashboard.autoRefresh ? 'Auto-refresh enabled' : 'Auto-refresh disabled',
-                'info'
-            );
+            if (dashboard) {
+                dashboard.autoRefresh = !dashboard.autoRefresh;
+                const button = event.target;
+                button.textContent = dashboard.autoRefresh ? '⏸️ Pause Auto-refresh' : '▶️ Resume Auto-refresh';
+                dashboard.showNotification(
+                    dashboard.autoRefresh ? 'Auto-refresh enabled' : 'Auto-refresh disabled',
+                    'info'
+                );
+            }
         }
 
         function showTaskModal() {
@@ -1231,7 +1247,7 @@
         }
 
         function emergencyStop() {
-            if (confirm('Are you sure you want to trigger an emergency stop? This will halt all orchestrator operations.')) {
+            if (dashboard && confirm('Are you sure you want to trigger an emergency stop? This will halt all orchestrator operations.')) {
                 fetch(`${dashboard.orchestratorUrl}/api/v1/control/stop`, { method: 'POST' })
                     .then(response => response.json())
                     .then(data => {
@@ -1248,44 +1264,53 @@
         }
 
         // Task form submission
-        document.getElementById('taskForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const taskData = {
-                task_type: document.getElementById('taskType').value,
-                priority: parseInt(document.getElementById('taskPriority').value),
-                input_data: JSON.parse(document.getElementById('taskInput').value || '{}'),
-                timeout: parseInt(document.getElementById('taskTimeout').value)
-            };
-
-            try {
-                const response = await fetch(`${dashboard.orchestratorUrl}/api/v1/tasks`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(taskData)
-                });
-
-                const result = await response.json();
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('taskForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
                 
-                if (result.success) {
-                    dashboard.showNotification(`Task submitted: ${result.task_id}`, 'success');
-                    closeTaskModal();
-                    document.getElementById('taskForm').reset();
-                } else {
-                    dashboard.showNotification('Task submission failed', 'error');
+                if (!dashboard) {
+                    alert('Dashboard not initialized yet, please wait...');
+                    return;
                 }
-            } catch (error) {
-                dashboard.showNotification('Task submission error', 'error');
-            }
+                
+                const taskData = {
+                    task_type: document.getElementById('taskType').value,
+                    priority: parseInt(document.getElementById('taskPriority').value),
+                    input_data: JSON.parse(document.getElementById('taskInput').value || '{}'),
+                    timeout: parseInt(document.getElementById('taskTimeout').value)
+                };
+
+                try {
+                    const response = await fetch(`${dashboard.orchestratorUrl}/api/v1/tasks`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(taskData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        dashboard.showNotification(`Task submitted: ${result.task_id}`, 'success');
+                        closeTaskModal();
+                        document.getElementById('taskForm').reset();
+                    } else {
+                        dashboard.showNotification('Task submission failed', 'error');
+                    }
+                } catch (error) {
+                    dashboard.showNotification('Task submission error', 'error');
+                }
+            });
         });
 
         // Close modal when clicking outside
-        window.onclick = function(event) {
-            const modal = document.getElementById('taskModal');
-            if (event.target === modal) {
-                closeTaskModal();
-            }
-        };
+        document.addEventListener('DOMContentLoaded', function() {
+            window.onclick = function(event) {
+                const modal = document.getElementById('taskModal');
+                if (event.target === modal) {
+                    closeTaskModal();
+                }
+            };
+        });
 
         // Add CSS animations
         const style = document.createElement('style');
