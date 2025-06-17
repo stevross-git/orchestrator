@@ -187,6 +187,33 @@ class OrchestratorAPI:
     def _setup_routes(self):
         """Setup all API routes"""
         
+        @self.app.route('/dashboard')
+        def dashboard():
+            """Serve the advanced dashboard"""
+            try:
+                return render_template('web4ai_advanced_dashboard.html')
+            except Exception as e:
+                logger.error(f"Dashboard template error: {e}")
+                return jsonify({
+                   'error': f'Dashboard template not found: {str(e)}',
+                    'success': False,
+                    'help': 'Ensure templates/web4ai_advanced_dashboard.html exists'
+                }), 500
+                
+                
+        @self.app.route('/api/v1/dashboard/config')
+        def dashboard_config():
+            """Dashboard configuration"""
+            return jsonify({
+                'success': True,
+                'config': {
+                    'orchestrator_url': request.host_url.rstrip('/'),
+                    'websocket_url': f"ws://{request.host.split(':')[0]}:9001",
+                    'refresh_interval': 5000,
+                    'auto_refresh': True
+                }
+            })
+        
         # Health and status endpoints
         @self.app.route('/api/v1/health', methods=['GET'])
         def health():
