@@ -23,6 +23,7 @@ import psutil
 
 # Import the main orchestrator
 from web4ai_orchestrator import Web4AIOrchestrator, TaskRequest, TaskPriority, NodeStatus, TaskStatus
+from dashboard_integration import setup_dashboard_routes
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -118,6 +119,8 @@ class OrchestratorAPI:
     def __init__(self, config: OrchestratorConfig):
         self.config = config
         self.orchestrator = None
+        self.app = Flask(__name__, template_folder='templates')
+        setup_dashboard_routes(self.app, self.orchestrator)
         self.app = Flask(__name__)
         CORS(self.app)
         
