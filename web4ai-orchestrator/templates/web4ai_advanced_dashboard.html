@@ -852,6 +852,7 @@
                 this.websocketUrl = `ws://${window.location.hostname}:9001`;
                 this.autoRefresh = true;
                 this.refreshInterval = 5000;
+                this.websocketRetryCount = 0;
                 this.charts = {};
                 this.data = {
                     nodes: {},
@@ -872,10 +873,14 @@
             }
 
             setupWebSocket() {
+                if (!this.websocketUrl) return;
+                
                 try {
-                    // Try secure WebSocket first if page is HTTPS
-                    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${wsProtocol}//${window.location.hostname}:9001`;
+                    // Use secure WebSocket for HTTPS, regular for HTTP
+                    let wsUrl = this.websocketUrl;
+                    if (window.location.protocol === 'https:') {
+                        wsUrl = wsUrl.replace('ws:', 'wss:');
+                    }
                     
                     console.log('🔌 Attempting WebSocket connection to:', wsUrl);
                     this.websocket = new WebSocket(wsUrl);
@@ -884,30 +889,59 @@
                         console.log('🔌 WebSocket connected');
                         document.getElementById('wsIndicator').className = 'ws-indicator';
                         document.getElementById('connectionStatus').textContent = 'Connected';
+                        this.websocketRetryCount = 0;
                     };
 
                     this.websocket.onmessage = (event) => {
-                        const message = JSON.parse(event.data);
-                        this.handleWebSocketMessage(message);
+                        try {
+                            const message = JSON.parse(event.data);
+                            this.handleWebSocketMessage(message);
+                        } catch (error) {
+                            console.error('Failed to parse WebSocket message:', error);
+                        }
                     };
 
-                    this.websocket.onclose = () => {
-                        console.log('🔌 WebSocket disconnected');
+                    this.websocket.onclose = (event) => {
+                        console.log('🔌 WebSocket disconnected, code:', event.code);
                         document.getElementById('wsIndicator').className = 'ws-indicator disconnected';
                         document.getElementById('connectionStatus').textContent = 'Disconnected';
                         
-                        // Attempt reconnection after 5 seconds
-                        setTimeout(() => this.setupWebSocket(), 5000);
+                        // Don't retry if it was a clean close
+                        if (event.code !== 1000) {
+                            this.scheduleWebSocketReconnect();
+                        }
                     };
 
                     this.websocket.onerror = (error) => {
-                        console.log('WebSocket error:', error);
+                        console.log('WebSocket connection error, falling back to polling');
+                        document.getElementById('wsIndicator').className = 'ws-indicator disconnected';
+                        document.getElementById('connectionStatus').textContent = 'Polling Mode';
                     };
                 } catch (error) {
                     console.error('Failed to setup WebSocket:', error);
-                    // Fall back to polling
+                    document.getElementById('wsIndicator').className = 'ws-indicator disconnected';
+                    document.getElementById('connectionStatus').textContent = 'Polling Mode';
                     this.startPolling();
                 }
+            }
+
+            scheduleWebSocketReconnect() {
+                if (!this.websocketRetryCount) {
+                    this.websocketRetryCount = 0;
+                }
+                
+                this.websocketRetryCount++;
+                const delay = Math.min(1000 * Math.pow(2, this.websocketRetryCount), 30000); // Max 30 seconds
+                
+                console.log(`Scheduling WebSocket reconnect in ${delay}ms (attempt ${this.websocketRetryCount})`);
+                setTimeout(() => {
+                    if (this.websocketRetryCount <= 5) { // Stop after 5 attempts
+                        this.setupWebSocket();
+                    } else {
+                        console.log('Max WebSocket reconnection attempts reached, using polling mode');
+                        this.startPolling();
+                    }
+                }, delay);
             }
 
             handleWebSocketMessage(message) {
@@ -931,79 +965,202 @@
 
             async loadInitialData() {
                 try {
-                    const response = await fetch(`${this.orchestratorUrl}/api/v1/status`);
-                    const data = await response.json();
+                    const response = await this.fetchWithTimeout(`${this.orchestratorUrl}/api/v1/status`);
                     
-                    if (data.success) {
-                        this.updateDashboard(data.data);
-                        await this.loadNodeDetails();
+                    if (response) {
+                        const data = await response.json();
+                        if (data.success) {
+                            this.updateDashboard(data.data);
+                            await this.loadNodeDetails();
+                            this.showNotification('Connected to orchestrator', 'success');
+                            return;
+                        }
                     }
                 } catch (error) {
                     console.error('Failed to load initial data:', error);
-                    this.showNotification('Failed to connect to orchestrator', 'error');
                 }
+                
+                // Fallback to sample data
+                console.log('API unavailable, using sample data');
+                this.showNotification('Using sample data - API unavailable', 'info');
+                this.generateSampleNodeDetails();
+                this.updateDashboardWithSampleData();
             }
 
             async loadNodeDetails() {
                 try {
-                    const nodesResponse = await fetch(`${this.orchestratorUrl}/api/v1/nodes`);
+                    const nodesResponse = await this.fetchWithTimeout(`${this.orchestratorUrl}/api/v1/nodes`);
+                    if (!nodesResponse) return;
+                    
                     const nodesData = await nodesResponse.json();
                     
                     if (nodesData.success) {
                         // Load detailed info for each node
                         const detailPromises = Object.keys(nodesData.nodes).map(async (nodeId) => {
                             try {
-                                const nodeResponse = await fetch(`${this.orchestratorUrl}/api/v1/nodes/${nodeId}`);
-                                const nodeData = await nodeResponse.json();
-                                if (nodeData.success) {
-                                    this.nodeDetails.set(nodeId, nodeData.node);
+                                const nodeResponse = await this.fetchWithTimeout(`${this.orchestratorUrl}/api/v1/nodes/${nodeId}`);
+                                if (nodeResponse) {
+                                    const nodeData = await nodeResponse.json();
+                                    if (nodeData.success) {
+                                        this.nodeDetails.set(nodeId, nodeData.node);
+                                    }
                                 }
                             } catch (error) {
                                 console.error(`Failed to load details for node ${nodeId}:`, error);
                             }
                         });
                         
-                        await Promise.all(detailPromises);
+                        await Promise.allSettled(detailPromises);
                         this.updateNodesList(nodesData);
                     }
                 } catch (error) {
                     console.error('Failed to load node details:', error);
+                    // Generate sample node details when API is unavailable
+                    this.generateSampleNodeDetails();
                 }
+            }
+
+            async fetchWithTimeout(url, timeout = 5000) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), timeout);
+                    
+                    const response = await fetch(url, {
+                        signal: controller.signal,
+                        headers: {
+                            'Accept': 'application/json',
+                        }
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    
+                    if (response.ok) {
+                        return response;
+                    } else {
+                        console.warn(`API request failed: ${response.status} ${response.statusText}`);
+                        return null;
+                    }
+                } catch (error) {
+                    if (error.name === 'AbortError') {
+                        console.warn(`Request timeout: ${url}`);
+                    } else {
+                        console.warn(`Request failed: ${url}`, error);
+                    }
+                    return null;
+                }
+            }
+
+            generateSampleNodeDetails() {
+                // Generate sample node details when API is unavailable
+                for (let i = 1; i <= 3; i++) {
+                    const nodeId = `node-${i}`;
+                    const sampleNode = {
+                        node_id: nodeId,
+                        host: `192.168.1.${100 + i}`,
+                        port: 8080 + i,
+                        node_type: 'enhanced_node',
+                        status: 'active',
+                        cpu_usage: Math.random() * 80 + 10,
+                        memory_usage: Math.random() * 70 + 15,
+                        gpu_usage: Math.random() * 60 + 5,
+                        load_score: Math.random() * 0.8 + 0.2,
+                        reliability_score: Math.random() * 0.3 + 0.7,
+                        version: '1.0.0',
+                        location: `Zone-${i}`,
+                        last_heartbeat: Date.now() / 1000,
+                        tasks_completed: Math.floor(Math.random() * 500) + 100,
+                        tasks_failed: Math.floor(Math.random() * 20),
+                        agents_count: Math.floor(Math.random() * 5) + 1,
+                        agents: this.generateSampleAgents(Math.floor(Math.random() * 5) + 1)
+                    };
+                    this.nodeDetails.set(nodeId, sampleNode);
+                }
+            }
+
+            updateDashboardWithSampleData() {
+                const sampleData = {
+                    network_metrics: {
+                        active_nodes: 3,
+                        total_nodes: 3,
+                        tasks_completed: 1250,
+                        tasks_failed: 45,
+                        success_rate: 0.965,
+                        average_response_time: 850,
+                        network_utilization: 0.65,
+                        throughput_per_minute: 85.5,
+                        uptime: 3600 * 24 * 5 // 5 days
+                    }
+                };
+                this.updateDashboard(sampleData);
+            }
+
+            updateMetricsFromAPI(metrics) {
+                // Handle metrics from API
+                this.data.metrics = metrics;
+                // Update any additional metrics displays if needed
+            }
+
+            updateTasksWithSampleData() {
+                const sampleTasks = [
+                    { id: 'task-001', type: 'ai_inference', status: 'running', time: '2m ago' },
+                    { id: 'task-002', type: 'data_processing', status: 'pending', time: '5m ago' },
+                    { id: 'task-003', type: 'model_training', status: 'completed', time: '10m ago' },
+                    { id: 'task-004', type: 'blockchain_operation', status: 'failed', time: '15m ago' },
+                    { id: 'task-005', type: 'ai_inference', status: 'running', time: '18m ago' }
+                ];
+                this.updateTasksDisplay(sampleTasks);
             }
 
             async refreshData() {
                 if (!this.autoRefresh) return;
 
                 try {
-                    const [statusResponse, metricsResponse, tasksResponse] = await Promise.all([
-                        fetch(`${this.orchestratorUrl}/api/v1/status`),
-                        fetch(`${this.orchestratorUrl}/api/v1/metrics`),
-                        fetch(`${this.orchestratorUrl}/api/v1/tasks`)
-                    ]);
+                    // Try to fetch data with timeout and error handling
+                    const requests = [
+                        this.fetchWithTimeout(`${this.orchestratorUrl}/api/v1/status`),
+                        this.fetchWithTimeout(`${this.orchestratorUrl}/api/v1/metrics`),
+                        this.fetchWithTimeout(`${this.orchestratorUrl}/api/v1/tasks`)
+                    ];
 
-                    const statusData = await statusResponse.json();
-                    const metricsData = await metricsResponse.json();
-                    const tasksData = await tasksResponse.json();
-
-                    if (statusData.success) {
-                        this.updateDashboard(statusData.data);
+                    const results = await Promise.allSettled(requests);
+                    
+                    // Handle status response
+                    if (results[0].status === 'fulfilled' && results[0].value) {
+                        const statusData = await results[0].value.json();
+                        if (statusData.success) {
+                            this.updateDashboard(statusData.data);
+                        }
+                    } else {
+                        // Fallback to sample data when API is unavailable
+                        this.updateDashboardWithSampleData();
                     }
 
-                    if (metricsData.success) {
-                        this.updateMetrics(metricsData.metrics);
+                    // Handle metrics response
+                    if (results[1].status === 'fulfilled' && results[1].value) {
+                        const metricsData = await results[1].value.json();
+                        if (metricsData.success) {
+                            this.updateMetricsFromAPI(metricsData.metrics);
+                        }
                     }
 
-                    if (tasksData.success) {
-                        this.updateTasks(tasksData.tasks);
+                    // Handle tasks response
+                    if (results[2].status === 'fulfilled' && results[2].value) {
+                        const tasksData = await results[2].value.json();
+                        if (tasksData.success) {
+                            this.updateTasks(tasksData.tasks);
+                        }
+                    } else {
+                        this.updateTasksWithSampleData();
                     }
 
                     // Periodically refresh node details
-                    if (Math.random() < 0.3) { // 30% chance
+                    if (Math.random() < 0.2) { // 20% chance
                         await this.loadNodeDetails();
                     }
 
                 } catch (error) {
                     console.error('Refresh failed:', error);
+                    this.updateDashboardWithSampleData();
                 }
             }
 
@@ -1058,19 +1215,56 @@
                 // Use node details if available, otherwise create sample nodes
                 if (this.nodeDetails.size > 0) {
                     this.nodeDetails.forEach((nodeDetail, nodeId) => {
-                        const nodeDiv = this.createNodeElement(nodeDetail);
-                        nodesList.appendChild(nodeDiv);
+                        try {
+                            const nodeDiv = this.createNodeElement(nodeDetail);
+                            nodesList.appendChild(nodeDiv);
+                        } catch (error) {
+                            console.error(`Error creating node element for ${nodeId}:`, error);
+                        }
                     });
                 } else {
                     // Create sample nodes based on metrics
                     const activeNodeCount = data.network_metrics?.active_nodes || 3;
                     for (let i = 0; i < activeNodeCount; i++) {
-                        const nodeId = `node-${i + 1}`;
-                        const sampleNode = {
-                            node_id: nodeId,
-                            status: 'active',
-                            cpu_usage: Math.random() * 80 + 10,
-                            memory_usage: Math.random() * 70 + 15,
+                        try {
+                            const nodeId = `node-${i + 1}`;
+                            const sampleNode = {
+                                node_id: nodeId,
+                                host: `192.168.1.${100 + i}`,
+                                port: 8080 + i,
+                                node_type: 'enhanced_node',
+                                status: 'active',
+                                cpu_usage: Math.random() * 80 + 10,
+                                memory_usage: Math.random() * 70 + 15,
+                                gpu_usage: Math.random() * 60 + 5,
+                                agents_count: Math.floor(Math.random() * 5) + 1,
+                                agents: this.generateSampleAgents(Math.floor(Math.random() * 5) + 1),
+                                last_heartbeat: Date.now() / 1000,
+                                load_score: Math.random() * 0.8 + 0.2,
+                                version: '1.0.0'
+                            };
+                            const nodeDiv = this.createNodeElement(sampleNode);
+                            nodesList.appendChild(nodeDiv);
+                        } catch (error) {
+                            console.error(`Error creating sample node ${i + 1}:`, error);
+                        }
+                    }
+                }
+
+                if (nodesList.children.length === 0) {
+                    nodesList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">No nodes available</div>';
+                }
+            }
+
+            cleanup() {
+                // Clean up intervals and connections
+                if (this.pollingInterval) {
+                    clearInterval(this.pollingInterval);
+                }
+                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    this.websocket.close();
+                }
+            } 15,
                             gpu_usage: Math.random() * 60 + 5,
                             agents_count: Math.floor(Math.random() * 5) + 1,
                             agents: this.generateSampleAgents(Math.floor(Math.random() * 5) + 1)
@@ -1598,19 +1792,79 @@
             }
 
             updateTasks(tasks) {
+                if (tasks && typeof tasks === 'object') {
+                    // Handle API response format
+                    this.updateTasksDisplay(this.processAPITasks(tasks));
+                } else {
+                    // Handle array format or fallback to sample data
+                    this.updateTasksWithSampleData();
+                }
+            }
+
+            processAPITasks(tasks) {
+                const allTasks = [];
+                
+                // Process pending tasks
+                if (tasks.pending) {
+                    tasks.pending.forEach(task => {
+                        allTasks.push({
+                            id: task.task_id,
+                            type: task.task_type,
+                            status: 'pending',
+                            time: this.getTimeAgo(task.created_at)
+                        });
+                    });
+                }
+                
+                // Process active tasks
+                if (tasks.active) {
+                    tasks.active.forEach(task => {
+                        allTasks.push({
+                            id: task.task_id,
+                            type: task.task_type,
+                            status: 'running',
+                            time: this.getTimeAgo(task.created_at)
+                        });
+                    });
+                }
+                
+                // Process completed tasks (show last few)
+                if (tasks.completed) {
+                    tasks.completed.slice(-5).forEach(task => {
+                        allTasks.push({
+                            id: task.task_id,
+                            type: task.task_type || 'unknown',
+                            status: 'completed',
+                            time: this.getTimeAgo(task.completed_at)
+                        });
+                    });
+                }
+                
+                // Process failed tasks (show last few)
+                if (tasks.failed) {
+                    tasks.failed.slice(-3).forEach(task => {
+                        allTasks.push({
+                            id: task.task_id,
+                            type: task.task_type || 'unknown',
+                            status: 'failed',
+                            time: this.getTimeAgo(task.completed_at)
+                        });
+                    });
+                }
+                
+                return allTasks.slice(0, 10); // Show max 10 tasks
+            }
+
+            updateTasksDisplay(taskList) {
                 const taskQueue = document.getElementById('taskQueue');
                 taskQueue.innerHTML = '';
 
-                // Generate sample tasks
-                const sampleTasks = [
-                    { id: 'task-001', type: 'ai_inference', status: 'running', time: '2m ago' },
-                    { id: 'task-002', type: 'data_processing', status: 'pending', time: '5m ago' },
-                    { id: 'task-003', type: 'model_training', status: 'completed', time: '10m ago' },
-                    { id: 'task-004', type: 'blockchain_operation', status: 'failed', time: '15m ago' },
-                    { id: 'task-005', type: 'ai_inference', status: 'running', time: '18m ago' }
-                ];
+                if (!taskList || taskList.length === 0) {
+                    taskQueue.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">No recent tasks</div>';
+                    return;
+                }
 
-                sampleTasks.forEach(task => {
+                taskList.forEach(task => {
                     const taskDiv = document.createElement('div');
                     taskDiv.className = `task-item task-${task.status}`;
                     taskDiv.innerHTML = `
@@ -1624,6 +1878,27 @@
                 });
             }
 
+            getTimeAgo(timestamp) {
+                if (!timestamp) return 'Unknown';
+                
+                try {
+                    const date = new Date(timestamp);
+                    const now = new Date();
+                    const diff = now - date;
+                    
+                    const minutes = Math.floor(diff / (1000 * 60));
+                    const hours = Math.floor(minutes / 60);
+                    const days = Math.floor(hours / 24);
+                    
+                    if (days > 0) return `${days}d ago`;
+                    if (hours > 0) return `${hours}h ago`;
+                    if (minutes > 0) return `${minutes}m ago`;
+                    return 'Just now';
+                } catch (error) {
+                    return 'Unknown';
+                }
+            }
+
             startAutoRefresh() {
                 setInterval(() => {
                     if (this.autoRefresh) {
@@ -1634,9 +1909,18 @@
 
             startPolling() {
                 // Fallback polling when WebSocket is not available
-                setInterval(() => {
-                    this.refreshData();
-                }, this.refreshInterval * 2);
+                console.log('Starting polling mode for data updates');
+                document.getElementById('connectionStatus').textContent = 'Polling Mode';
+                
+                if (this.pollingInterval) {
+                    clearInterval(this.pollingInterval);
+                }
+                
+                this.pollingInterval = setInterval(() => {
+                    if (this.autoRefresh) {
+                        this.refreshData();
+                    }
+                }, this.refreshInterval * 2); // Poll less frequently than normal refresh
             }
 
             showNotification(message, type = 'info') {
