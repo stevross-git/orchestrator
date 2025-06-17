@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web4AI Orchestrator - Advanced Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .dashboard-container {
+            display: grid;
+            grid-template-areas: 
+                "header header header"
+                "sidebar main main"
+                "sidebar main main";
+            grid-template-columns: 280px 1fr 1fr;
+            grid-template-rows: 80px 1fr 1fr;
+            height: 100vh;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .header {
+            grid-area: header;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .logo h1 {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px;
+            background: #10b981;
+            color: white;
+            border-radius: 25px;
+            font-weight: 600;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #ffffff;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .sidebar {
+            grid-area: sidebar;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            overflow-y: auto;
+        }
+
+        .main-content {
+            grid-area: main;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: auto 1fr 1fr;
+            gap: 20px;
+        }
+
+        .metrics-grid {
+            grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .metric-label {
+            color: #6b7280;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .metric-change {
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 15px;
+        }
+
+        .positive { background: #dcfce7; color: #16a34a; }
+        .negative { background: #fef2f2; color: #dc2626; }
+        .neutral { background: #f3f4f6; color: #6b7280; }
+
+        .chart-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .chart-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #374151;
+        }
+
+        .nodes-section {
+            margin-bottom: 30px;
+        }
+
+        .section-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #374151;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .node-item {
+            background: #f8fafc;
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-left: 4px solid #10b981;
+            transition: all 0.3s ease;
+        }
+
+        .node-item:hover {
+            background: #f1f5f9;
+            transform: translateX(5px);
+        }
+
+        .node-item.offline {
+            border-left-color: #ef4444;
+            background: #fef2f2;
+        }
+
+        .node-item.degraded {
+            border-left-color: #f59e0b;
+            background: #fef3c7;
+        }
+
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .node-name {
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .node-status {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .status-active { background: #dcfce7; color: #16a34a; }
+        .status-offline { background: #fef2f2; color: #dc2626; }
+        .status-degraded { background: #fef3c7; color: #d97706; }
+
+        .node-metrics {
+            display: flex;
+            gap: 15px;
+            font-size: 0.85rem;
+            color: #6b7280;
+        }
+
+        .progress-bar {
+            background: #e5e7eb;
+            border-radius: 10px;
+            height: 6px;
+            margin-top: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.5s ease;
+        }
+
+        .cpu-bar { background: linear-gradient(90deg, #10b981, #059669); }
+        .memory-bar { background: linear-gradient(90deg, #3b82f6, #1d4ed8); }
+        .gpu-bar { background: linear-gradient(90deg, #f59e0b, #d97706); }
+
+        .alerts-section {
+            margin-bottom: 30px;
+        }
+
+        .alert-item {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .alert-critical { background: #fef2f2; border-color: #fecaca; }
+        .alert-warning { background: #fef3c7; border-color: #fde68a; }
+        .alert-info { background: #dbeafe; border-color: #bfdbfe; }
+
+        .alert-icon {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 12px;
+        }
+
+        .icon-critical { background: #dc2626; color: white; }
+        .icon-warning { background: #f59e0b; color: white; }
+        .icon-info { background: #3b82f6; color: white; }
+
+        .network-topology {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            grid-column: 1 / -1;
+            margin-top: 20px;
+        }
+
+        .topology-svg {
+            width: 100%;
+            height: 300px;
+            border-radius: 10px;
+            background: #f8fafc;
+        }
+
+        .controls-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            margin-top: 20px;
+        }
+
+        .control-button {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .control-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .control-button.danger {
+            background: linear-gradient(45deg, #ef4444, #dc2626);
+        }
+
+        .control-button.warning {
+            background: linear-gradient(45deg, #f59e0b, #d97706);
+        }
+
+        .refresh-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #10b981;
+            border-top: 2px solid transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 8px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+            color: #6b7280;
+        }
+
+        .ws-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+        }
+
+        .ws-indicator.disconnected {
+            background: #ef4444;
+        }
+
+        .task-queue {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .task-item {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-left: 3px solid #3b82f6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .task-pending { border-left-color: #f59e0b; }
+        .task-running { border-left-color: #10b981; }
+        .task-completed { border-left-color: #6b7280; }
+        .task-failed { border-left-color: #ef4444; }
+
+        .task-info {
+            font-size: 0.9rem;
+        }
+
+        .task-id {
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .task-type {
+            color: #6b7280;
+            margin-top: 2px;
+        }
+
+        .task-time {
+            font-size: 0.8rem;
+            color: #9ca3af;
+        }
+
+        @media (max-width: 1200px) {
+            .dashboard-container {
+                grid-template-areas: 
+                    "header"
+                    "main"
+                    "sidebar";
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr auto;
+            }
+
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+
+            .metrics-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            }
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            background: white;
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 15px;
+            width: 80%;
+            max-width: 600px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: modalAppear 0.3s ease;
+        }
+
+        @keyframes modalAppear {
+            from { opacity: 0; transform: translateY(-50px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close:hover {
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo">
+                <div style="font-size: 2rem;">🚀</div>
+                <h1>Web4AI Orchestrator</h1>
+            </div>
+            <div style="display: flex; align-items: center; gap: 20px;">
+                <div class="connection-status">
+                    <div class="ws-indicator" id="wsIndicator"></div>
+                    <span id="connectionStatus">Connected</span>
+                </div>
+                <div class="status-indicator" id="systemStatus">
+                    <div class="status-dot"></div>
+                    <span>System Healthy</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Network Nodes -->
+            <div class="nodes-section">
+                <div class="section-title">
+                    🖥️ Network Nodes <span class="refresh-indicator" id="nodeRefresh" style="display: none;"></span>
+                </div>
+                <div id="nodesList">
+                    <!-- Nodes will be populated by JavaScript -->
+                </div>
+            </div>
+
+            <!-- Active Alerts -->
+            <div class="alerts-section">
+                <div class="section-title">⚠️ Active Alerts</div>
+                <div id="alertsList">
+                    <!-- Alerts will be populated by JavaScript -->
+                </div>
+            </div>
+
+            <!-- Control Panel -->
+            <div class="controls-panel">
+                <div class="section-title">🎛️ Controls</div>
+                <button class="control-button" onclick="refreshDashboard()">🔄 Refresh</button>
+                <button class="control-button" onclick="showTaskModal()">📋 Submit Task</button>
+                <button class="control-button warning" onclick="toggleAutoRefresh()">⏸️ Pause Auto-refresh</button>
+                <button class="control-button danger" onclick="emergencyStop()">🛑 Emergency Stop</button>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Metrics Grid -->
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value" id="activeNodes">-</div>
+                    <div class="metric-label">Active Nodes</div>
+                    <div class="metric-change positive" id="nodesChange">+2 this hour</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="totalTasks">-</div>
+                    <div class="metric-label">Tasks Processed</div>
+                    <div class="metric-change positive" id="tasksChange">+15% from yesterday</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="successRate">-</div>
+                    <div class="metric-label">Success Rate</div>
+                    <div class="metric-change neutral" id="successChange">Stable</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="avgResponseTime">-</div>
+                    <div class="metric-label">Avg Response Time</div>
+                    <div class="metric-change positive" id="responseChange">-50ms improvement</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="networkUtil">-</div>
+                    <div class="metric-label">Network Utilization</div>
+                    <div class="metric-change neutral" id="utilChange">Optimal range</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="throughput">-</div>
+                    <div class="metric-label">Throughput/min</div>
+                    <div class="metric-change positive" id="throughputChange">+8% increase</div>
+                </div>
+            </div>
+
+            <!-- Performance Chart -->
+            <div class="chart-container">
+                <div class="chart-title">🔬 Performance Metrics (Real-time)</div>
+                <canvas id="performanceChart" width="400" height="200"></canvas>
+            </div>
+
+            <!-- Network Utilization Chart -->
+            <div class="chart-container">
+                <div class="chart-title">📊 Network Utilization</div>
+                <canvas id="utilizationChart" width="400" height="200"></canvas>
+            </div>
+
+            <!-- Task Queue -->
+            <div class="task-queue">
+                <div class="chart-title">📋 Task Queue</div>
+                <div id="taskQueue">
+                    <!-- Tasks will be populated by JavaScript -->
+                </div>
+            </div>
+
+            <!-- Resource Monitoring -->
+            <div class="chart-container">
+                <div class="chart-title">💻 Resource Monitoring</div>
+                <canvas id="resourceChart" width="400" height="200"></canvas>
+            </div>
+        </div>
+
+        <!-- Network Topology -->
+        <div class="network-topology">
+            <div class="chart-title">🌐 Network Topology</div>
+            <svg class="topology-svg" id="topologySvg"></svg>
+        </div>
+    </div>
+
+    <!-- Task Submission Modal -->
+    <div id="taskModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeTaskModal()">&times;</span>
+            <h2>Submit New Task</h2>
+            <form id="taskForm" style="margin-top: 20px;">
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: 600;">Task Type:</label>
+                    <select id="taskType" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
+                        <option value="ai_inference">AI Inference</option>
+                        <option value="data_processing">Data Processing</option>
+                        <option value="model_training">Model Training</option>
+                        <option value="blockchain_operation">Blockchain Operation</option>
+                    </select>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: 600;">Priority:</label>
+                    <select id="taskPriority" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
+                        <option value="1">Critical</option>
+                        <option value="2">High</option>
+                        <option value="3" selected>Normal</option>
+                        <option value="4">Low</option>
+                        <option value="5">Background</option>
+                    </select>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: 600;">Input Data (JSON):</label>
+                    <textarea id="taskInput" rows="4" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;" placeholder='{"prompt": "Your input here"}'></textarea>
+                </div>
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 5px; font-weight: 600;">Timeout (seconds):</label>
+                    <input type="number" id="taskTimeout" value="300" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px;">
+                </div>
+                <button type="submit" class="control-button" style="margin: 0;">Submit Task</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Dashboard State Management
+        class DashboardState {
+            constructor() {
+                this.orchestratorUrl = 'http://localhost:9000';
+                this.websocket = null;
+                this.autoRefresh = true;
+                this.refreshInterval = 5000;
+                this.charts = {};
+                this.data = {
+                    nodes: {},
+                    tasks: {},
+                    metrics: {},
+                    alerts: []
+                };
+                this.init();
+            }
+
+            init() {
+                this.setupWebSocket();
+                this.setupCharts();
+                this.startAutoRefresh();
+                this.loadInitialData();
+            }
+
+            setupWebSocket() {
+                try {
+                    this.websocket = new WebSocket('ws://localhost:9001');
+                    
+                    this.websocket.onopen = () => {
+                        console.log('🔌 WebSocket connected');
+                        document.getElementById('wsIndicator').className = 'ws-indicator';
+                        document.getElementById('connectionStatus').textContent = 'Connected';
+                    };
+
+                    this.websocket.onmessage = (event) => {
+                        const message = JSON.parse(event.data);
+                        this.handleWebSocketMessage(message);
+                    };
+
+                    this.websocket.onclose = () => {
+                        console.log('🔌 WebSocket disconnected');
+                        document.getElementById('wsIndicator').className = 'ws-indicator disconnected';
+                        document.getElementById('connectionStatus').textContent = 'Disconnected';
+                        
+                        // Attempt reconnection
+                        setTimeout(() => this.setupWebSocket(), 5000);
+                    };
+
+                    this.websocket.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                    };
+                } catch (error) {
+                    console.error('Failed to setup WebSocket:', error);
+                    // Fall back to polling
+                    this.startPolling();
+                }
+            }
+
+            handleWebSocketMessage(message) {
+                switch (message.type) {
+                    case 'network_status':
+                        this.updateDashboard(message.data);
+                        break;
+                    case 'node_registered':
+                        this.showNotification(`New node registered: ${message.data.node_id}`, 'info');
+                        break;
+                    case 'task_submitted':
+                        this.showNotification(`Task submitted: ${message.data.task_id}`, 'info');
+                        break;
+                    case 'task_completed':
+                        this.showNotification(`Task completed: ${message.data.task_id}`, 'success');
+                        break;
+                    default:
+                        console.log('Unknown message type:', message.type);
+                }
+            }
+
+            async loadInitialData() {
+                try {
+                    const response = await fetch(`${this.orchestratorUrl}/api/v1/status`);
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        this.updateDashboard(data.data);
+                    }
+                } catch (error) {
+                    console.error('Failed to load initial data:', error);
+                    this.showNotification('Failed to connect to orchestrator', 'error');
+                }
+            }
+
+            async refreshData() {
+                if (!this.autoRefresh) return;
+
+                try {
+                    const [statusResponse, metricsResponse, tasksResponse] = await Promise.all([
+                        fetch(`${this.orchestratorUrl}/api/v1/status`),
+                        fetch(`${this.orchestratorUrl}/api/v1/metrics`),
+                        fetch(`${this.orchestratorUrl}/api/v1/tasks`)
+                    ]);
+
+                    const statusData = await statusResponse.json();
+                    const metricsData = await metricsResponse.json();
+                    const tasksData = await tasksResponse.json();
+
+                    if (statusData.success) {
+                        this.updateDashboard(statusData.data);
+                    }
+
+                    if (metricsData.success) {
+                        this.updateMetrics(metricsData.metrics);
+                    }
+
+                    if (tasksData.success) {
+                        this.updateTasks(tasksData.tasks);
+                    }
+
+                } catch (error) {
+                    console.error('Refresh failed:', error);
+                }
+            }
+
+            updateDashboard(data) {
+                this.data = { ...this.data, ...data };
+                this.updateMetricsCards(data);
+                this.updateNodesList(data);
+                this.updateCharts(data);
+                this.updateTopology(data);
+                this.updateAlerts(data);
+            }
+
+            updateMetricsCards(data) {
+                const metrics = data.network_metrics || {};
+                
+                document.getElementById('activeNodes').textContent = metrics.active_nodes || 0;
+                document.getElementById('totalTasks').textContent = (metrics.tasks_completed || 0).toLocaleString();
+                document.getElementById('successRate').textContent = ((metrics.success_rate || 0) * 100).toFixed(1) + '%';
+                document.getElementById('avgResponseTime').textContent = (metrics.average_response_time || 0).toFixed(0) + 'ms';
+                document.getElementById('networkUtil').textContent = ((metrics.network_utilization || 0) * 100).toFixed(1) + '%';
+                document.getElementById('throughput').textContent = (metrics.throughput_per_minute || 0).toFixed(1);
+
+                // Update system status
+                const systemStatus = document.getElementById('systemStatus');
+                if (metrics.active_nodes > 0 && metrics.success_rate > 0.9) {
+                    systemStatus.innerHTML = '<div class="status-dot"></div><span>System Healthy</span>';
+                    systemStatus.style.background = '#10b981';
+                } else if (metrics.active_nodes === 0) {
+                    systemStatus.innerHTML = '<div class="status-dot"></div><span>No Active Nodes</span>';
+                    systemStatus.style.background = '#ef4444';
+                } else {
+                    systemStatus.innerHTML = '<div class="status-dot"></div><span>System Degraded</span>';
+                    systemStatus.style.background = '#f59e0b';
+                }
+            }
+
+            updateNodesList(data) {
+                const nodesList = document.getElementById('nodesList');
+                const nodes = data.nodes || {};
+                
+                nodesList.innerHTML = '';
+
+                // Show nodes from the orchestrator data
+                if (data.network_metrics && data.network_metrics.active_nodes > 0) {
+                    // Create sample nodes based on metrics
+                    for (let i = 0; i < data.network_metrics.active_nodes; i++) {
+                        const nodeId = `node-${i + 1}`;
+                        const nodeDiv = this.createNodeElement({
+                            node_id: nodeId,
+                            status: 'active',
+                            cpu_usage: Math.random() * 80 + 10,
+                            memory_usage: Math.random() * 70 + 15,
+                            gpu_usage: Math.random() * 60 + 5,
+                            agents_count: Math.floor(Math.random() * 5) + 1
+                        });
+                        nodesList.appendChild(nodeDiv);
+                    }
+                }
+
+                if (nodesList.children.length === 0) {
+                    nodesList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">No nodes registered</div>';
+                }
+            }
+
+            createNodeElement(node) {
+                const nodeDiv = document.createElement('div');
+                nodeDiv.className = `node-item ${node.status}`;
+                
+                const statusClass = `status-${node.status}`;
+                const statusText = node.status.charAt(0).toUpperCase() + node.status.slice(1);
+                
+                nodeDiv.innerHTML = `
+                    <div class="node-header">
+                        <div class="node-name">${node.node_id}</div>
+                        <div class="node-status ${statusClass}">${statusText}</div>
+                    </div>
+                    <div class="node-metrics">
+                        <div style="flex: 1;">
+                            CPU: ${node.cpu_usage.toFixed(1)}%
+                            <div class="progress-bar">
+                                <div class="progress-fill cpu-bar" style="width: ${node.cpu_usage}%"></div>
+                            </div>
+                        </div>
+                        <div style="flex: 1;">
+                            RAM: ${node.memory_usage.toFixed(1)}%
+                            <div class="progress-bar">
+                                <div class="progress-fill memory-bar" style="width: ${node.memory_usage}%"></div>
+                            </div>
+                        </div>
+                        <div style="flex: 1;">
+                            GPU: ${node.gpu_usage.toFixed(1)}%
+                            <div class="progress-bar">
+                                <div class="progress-fill gpu-bar" style="width: ${node.gpu_usage}%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 8px; font-size: 0.8rem; color: #6b7280;">
+                        Agents: ${node.agents_count} | Uptime: ${Math.floor(Math.random() * 72)}h
+                    </div>
+                `;
+                
+                return nodeDiv;
+            }
+
+            updateAlerts(data) {
+                const alertsList = document.getElementById('alertsList');
+                const sampleAlerts = [];
+                
+                // Generate alerts based on data
+                const metrics = data.network_metrics || {};
+                
+                if (metrics.active_nodes === 0) {
+                    sampleAlerts.push({
+                        type: 'critical',
+                        message: 'No active nodes available',
+                        time: 'Just now'
+                    });
+                }
+                
+                if (metrics.success_rate < 0.9) {
+                    sampleAlerts.push({
+                        type: 'warning',
+                        message: 'Low success rate detected',
+                        time: '2 minutes ago'
+                    });
+                }
+                
+                if (metrics.network_utilization > 0.8) {
+                    sampleAlerts.push({
+                        type: 'warning',
+                        message: 'High network utilization',
+                        time: '5 minutes ago'
+                    });
+                }
+
+                alertsList.innerHTML = '';
+                
+                if (sampleAlerts.length === 0) {
+                    alertsList.innerHTML = '<div style="text-align: center; color: #10b981; padding: 15px;">✅ No active alerts</div>';
+                } else {
+                    sampleAlerts.forEach(alert => {
+                        const alertDiv = document.createElement('div');
+                        alertDiv.className = `alert-item alert-${alert.type}`;
+                        alertDiv.innerHTML = `
+                            <div class="alert-icon icon-${alert.type}">${alert.type === 'critical' ? '!' : alert.type === 'warning' ? '⚠' : 'ℹ'}</div>
+                            <div style="flex: 1;">
+                                <div style="font-weight: 600;">${alert.message}</div>
+                                <div style="font-size: 0.8rem; color: #6b7280;">${alert.time}</div>
+                            </div>
+                        `;
+                        alertsList.appendChild(alertDiv);
+                    });
+                }
+            }
+
+            setupCharts() {
+                // Performance Chart
+                const perfCtx = document.getElementById('performanceChart').getContext('2d');
+                this.charts.performance = new Chart(perfCtx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Success Rate (%)',
+                            data: [],
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            tension: 0.4
+                        }, {
+                            label: 'Response Time (ms)',
+                            data: [],
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            tension: 0.4,
+                            yAxisID: 'y1'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        interaction: {
+                            intersect: false,
+                            mode: 'index'
+                        },
+                        plugins: {
+                            legend: {
+                                position: 'top'
+                            }
+                        },
+                        scales: {
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                max: 100,
+                                min: 0
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                grid: {
+                                    drawOnChartArea: false,
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Utilization Chart
+                const utilCtx = document.getElementById('utilizationChart').getContext('2d');
+                this.charts.utilization = new Chart(utilCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Used', 'Available'],
+                        datasets: [{
+                            data: [70, 30],
+                            backgroundColor: ['#667eea', '#e5e7eb'],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+
+                // Resource Chart
+                const resourceCtx = document.getElementById('resourceChart').getContext('2d');
+                this.charts.resource = new Chart(resourceCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['CPU', 'Memory', 'GPU', 'Network'],
+                        datasets: [{
+                            label: 'Usage (%)',
+                            data: [65, 45, 30, 70],
+                            backgroundColor: [
+                                'rgba(16, 185, 129, 0.8)',
+                                'rgba(59, 130, 246, 0.8)',
+                                'rgba(245, 158, 11, 0.8)',
+                                'rgba(139, 92, 246, 0.8)'
+                            ],
+                            borderColor: [
+                                '#10b981',
+                                '#3b82f6',
+                                '#f59e0b',
+                                '#8b5cf6'
+                            ],
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                display: false
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 100
+                            }
+                        }
+                    }
+                });
+            }
+
+            updateCharts(data) {
+                const metrics = data.network_metrics || {};
+                const now = new Date().toLocaleTimeString();
+
+                // Update performance chart
+                const perfChart = this.charts.performance;
+                if (perfChart.data.labels.length > 20) {
+                    perfChart.data.labels.shift();
+                    perfChart.data.datasets[0].data.shift();
+                    perfChart.data.datasets[1].data.shift();
+                }
+                
+                perfChart.data.labels.push(now);
+                perfChart.data.datasets[0].data.push((metrics.success_rate * 100) || 0);
+                perfChart.data.datasets[1].data.push(metrics.average_response_time || 0);
+                perfChart.update('none');
+
+                // Update utilization chart
+                const utilChart = this.charts.utilization;
+                const utilization = (metrics.network_utilization * 100) || 0;
+                utilChart.data.datasets[0].data = [utilization, 100 - utilization];
+                utilChart.update('none');
+
+                // Update resource chart with sample data
+                const resourceChart = this.charts.resource;
+                resourceChart.data.datasets[0].data = [
+                    Math.random() * 30 + 40, // CPU
+                    Math.random() * 25 + 35, // Memory
+                    Math.random() * 40 + 20, // GPU
+                    utilization              // Network
+                ];
+                resourceChart.update('none');
+            }
+
+            updateTopology(data) {
+                const svg = d3.select('#topologySvg');
+                svg.selectAll('*').remove();
+
+                const width = svg.node().clientWidth;
+                const height = 300;
+
+                // Create orchestrator node
+                const orchestrator = {
+                    id: 'orchestrator',
+                    x: width / 2,
+                    y: 50,
+                    type: 'orchestrator'
+                };
+
+                // Create sample nodes
+                const nodes = [orchestrator];
+                const activeNodes = data.network_metrics?.active_nodes || 0;
+                
+                for (let i = 0; i < activeNodes; i++) {
+                    const angle = (i / activeNodes) * 2 * Math.PI;
+                    const radius = 150;
+                    nodes.push({
+                        id: `node-${i + 1}`,
+                        x: width / 2 + Math.cos(angle) * radius,
+                        y: height / 2 + Math.sin(angle) * radius,
+                        type: 'node'
+                    });
+                }
+
+                // Draw connections
+                const links = nodes.slice(1).map(node => ({
+                    source: orchestrator,
+                    target: node
+                }));
+
+                svg.selectAll('.link')
+                    .data(links)
+                    .enter().append('line')
+                    .attr('class', 'link')
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y)
+                    .attr('stroke', '#667eea')
+                    .attr('stroke-width', 2)
+                    .attr('opacity', 0.6);
+
+                // Draw nodes
+                const nodeGroups = svg.selectAll('.node')
+                    .data(nodes)
+                    .enter().append('g')
+                    .attr('class', 'node')
+                    .attr('transform', d => `translate(${d.x}, ${d.y})`);
+
+                nodeGroups.append('circle')
+                    .attr('r', d => d.type === 'orchestrator' ? 25 : 15)
+                    .attr('fill', d => d.type === 'orchestrator' ? '#667eea' : '#10b981')
+                    .attr('stroke', '#fff')
+                    .attr('stroke-width', 2);
+
+                nodeGroups.append('text')
+                    .attr('text-anchor', 'middle')
+                    .attr('dy', 4)
+                    .attr('fill', 'white')
+                    .attr('font-size', d => d.type === 'orchestrator' ? '12px' : '10px')
+                    .attr('font-weight', 'bold')
+                    .text(d => d.type === 'orchestrator' ? '🎛️' : '🖥️');
+
+                nodeGroups.append('text')
+                    .attr('text-anchor', 'middle')
+                    .attr('dy', -30)
+                    .attr('fill', '#374151')
+                    .attr('font-size', '12px')
+                    .attr('font-weight', '600')
+                    .text(d => d.id);
+            }
+
+            updateTasks(tasks) {
+                const taskQueue = document.getElementById('taskQueue');
+                taskQueue.innerHTML = '';
+
+                // Generate sample tasks
+                const sampleTasks = [
+                    { id: 'task-001', type: 'ai_inference', status: 'running', time: '2m ago' },
+                    { id: 'task-002', type: 'data_processing', status: 'pending', time: '5m ago' },
+                    { id: 'task-003', type: 'model_training', status: 'completed', time: '10m ago' },
+                    { id: 'task-004', type: 'blockchain_operation', status: 'failed', time: '15m ago' },
+                    { id: 'task-005', type: 'ai_inference', status: 'running', time: '18m ago' }
+                ];
+
+                sampleTasks.forEach(task => {
+                    const taskDiv = document.createElement('div');
+                    taskDiv.className = `task-item task-${task.status}`;
+                    taskDiv.innerHTML = `
+                        <div class="task-info">
+                            <div class="task-id">${task.id}</div>
+                            <div class="task-type">${task.type}</div>
+                        </div>
+                        <div class="task-time">${task.time}</div>
+                    `;
+                    taskQueue.appendChild(taskDiv);
+                });
+            }
+
+            startAutoRefresh() {
+                setInterval(() => {
+                    if (this.autoRefresh) {
+                        this.refreshData();
+                    }
+                }, this.refreshInterval);
+            }
+
+            startPolling() {
+                // Fallback polling when WebSocket is not available
+                setInterval(() => {
+                    this.refreshData();
+                }, this.refreshInterval * 2);
+            }
+
+            showNotification(message, type = 'info') {
+                // Simple notification system
+                const notification = document.createElement('div');
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    background: ${type === 'error' ? '#ef4444' : type === 'success' ? '#10b981' : '#3b82f6'};
+                    color: white;
+                    padding: 15px 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+                    z-index: 1000;
+                    animation: slideIn 0.3s ease;
+                `;
+                notification.textContent = message;
+                document.body.appendChild(notification);
+
+                setTimeout(() => {
+                    notification.style.animation = 'slideOut 0.3s ease';
+                    setTimeout(() => document.body.removeChild(notification), 300);
+                }, 3000);
+            }
+        }
+
+        // Global functions for UI interactions
+        const dashboard = new DashboardState();
+
+        function refreshDashboard() {
+            dashboard.refreshData();
+            dashboard.showNotification('Dashboard refreshed', 'success');
+        }
+
+        function toggleAutoRefresh() {
+            dashboard.autoRefresh = !dashboard.autoRefresh;
+            const button = event.target;
+            button.textContent = dashboard.autoRefresh ? '⏸️ Pause Auto-refresh' : '▶️ Resume Auto-refresh';
+            dashboard.showNotification(
+                dashboard.autoRefresh ? 'Auto-refresh enabled' : 'Auto-refresh disabled',
+                'info'
+            );
+        }
+
+        function showTaskModal() {
+            document.getElementById('taskModal').style.display = 'block';
+        }
+
+        function closeTaskModal() {
+            document.getElementById('taskModal').style.display = 'none';
+        }
+
+        function emergencyStop() {
+            if (confirm('Are you sure you want to trigger an emergency stop? This will halt all orchestrator operations.')) {
+                fetch(`${dashboard.orchestratorUrl}/api/v1/control/stop`, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            dashboard.showNotification('Emergency stop initiated', 'warning');
+                        } else {
+                            dashboard.showNotification('Emergency stop failed', 'error');
+                        }
+                    })
+                    .catch(error => {
+                        dashboard.showNotification('Emergency stop request failed', 'error');
+                    });
+            }
+        }
+
+        // Task form submission
+        document.getElementById('taskForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const taskData = {
+                task_type: document.getElementById('taskType').value,
+                priority: parseInt(document.getElementById('taskPriority').value),
+                input_data: JSON.parse(document.getElementById('taskInput').value || '{}'),
+                timeout: parseInt(document.getElementById('taskTimeout').value)
+            };
+
+            try {
+                const response = await fetch(`${dashboard.orchestratorUrl}/api/v1/tasks`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(taskData)
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    dashboard.showNotification(`Task submitted: ${result.task_id}`, 'success');
+                    closeTaskModal();
+                    document.getElementById('taskForm').reset();
+                } else {
+                    dashboard.showNotification('Task submission failed', 'error');
+                }
+            } catch (error) {
+                dashboard.showNotification('Task submission error', 'error');
+            }
+        });
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('taskModal');
+            if (event.target === modal) {
+                closeTaskModal();
+            }
+        };
+
+        // Add CSS animations
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOut {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+    </script>
+</body>
+</html>
