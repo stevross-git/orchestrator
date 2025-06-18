@@ -1409,4 +1409,5 @@ def main():
     except Exception as e:
         logger.error(f"❌ Server error: {e}")
 
-if __name__ == '
+if __name__ == '__main__':
+    main()
