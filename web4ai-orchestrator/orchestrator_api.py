@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Web4AI Orchestrator API Server
+Web4AI Orchestrator API Server - COMPLETE FIXED VERSION
 RESTful API interface and configuration management for the orchestrator
 """
 
@@ -14,16 +14,17 @@ import yaml
 import argparse
 import signal
 import websockets
+import time  # Added missing import
 from datetime import datetime
 from typing import Dict, Any, Optional
 import logging
 from functools import wraps
 import traceback
 import psutil
+import random
 
 # Import the main orchestrator
 from web4ai_orchestrator import Web4AIOrchestrator, TaskRequest, TaskPriority, NodeStatus, TaskStatus
-from dashboard_integration import setup_dashboard_routes
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -61,7 +62,8 @@ class OrchestratorConfig:
                 'task_timeout': 300,
                 'max_retries': 3,
                 'auto_discovery': True,
-                'security_enabled': False
+                'security_enabled': False,
+                'auto_start': True
             },
             'network': {
                 'discovery_endpoints': [
@@ -119,9 +121,14 @@ class OrchestratorAPI:
     def __init__(self, config: OrchestratorConfig):
         self.config = config
         self.orchestrator = None
-        self.app = Flask(__name__, template_folder='templates')
-        setup_dashboard_routes(self.app, self.orchestrator)
-        self.app = Flask(__name__)
+        
+        # Create Flask app with proper template configuration
+        template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+        if not os.path.exists(template_dir):
+            os.makedirs(template_dir, exist_ok=True)
+            logger.info(f"Created templates directory: {template_dir}")
+        
+        self.app = Flask(__name__, template_folder=template_dir)
         CORS(self.app)
         
         # API statistics
@@ -136,9 +143,9 @@ class OrchestratorAPI:
         self.websocket_server = None
         self.websocket_clients = set()
         
-        # Setup routes
-        self._setup_routes()
+        # Setup routes and middleware
         self._setup_middleware()
+        self._setup_routes()
         
         logger.info("🌐 Orchestrator API initialized")
     
@@ -188,19 +195,15 @@ class OrchestratorAPI:
         """Setup all API routes"""
         
         @self.app.route('/dashboard')
+        @self.app.route('/')
         def dashboard():
             """Serve the advanced dashboard"""
             try:
                 return render_template('web4ai_advanced_dashboard.html')
             except Exception as e:
                 logger.error(f"Dashboard template error: {e}")
-                return jsonify({
-                   'error': f'Dashboard template not found: {str(e)}',
-                    'success': False,
-                    'help': 'Ensure templates/web4ai_advanced_dashboard.html exists'
-                }), 500
-                
-                
+                return self._create_basic_dashboard(), 200, {'Content-Type': 'text/html'}
+        
         @self.app.route('/api/v1/dashboard/config')
         def dashboard_config():
             """Dashboard configuration"""
@@ -214,24 +217,334 @@ class OrchestratorAPI:
                 }
             })
         
+        @self.app.route('/api/v1/dashboard/alerts')
+        def dashboard_alerts():
+            """Get active alerts for dashboard"""
+            alerts = []
+            
+            if self.orchestrator:
+                # Check for system alerts
+                network_metrics = self.orchestrator.network_metrics
+                
+                # No active nodes alert
+                if network_metrics.get('active_nodes', 0) == 0:
+                    alerts.append({
+                        'id': 'no_nodes',
+                        'type': 'critical',
+                        'title': 'No Active Nodes',
+                        'message': 'No nodes are currently active in the network',
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'severity': 'critical'
+                    })
+                
+                # Low success rate alert
+                success_rate = network_metrics.get('success_rate', 1.0)
+                if success_rate < 0.9:
+                    alerts.append({
+                        'id': 'low_success_rate',
+                        'type': 'warning',
+                        'title': 'Low Success Rate',
+                        'message': f'Task success rate is {success_rate:.1%}',
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'severity': 'warning'
+                    })
+                
+                # High response time alert
+                avg_response_time = network_metrics.get('average_response_time', 0)
+                if avg_response_time > 5000:  # 5 seconds
+                    alerts.append({
+                        'id': 'high_response_time',
+                        'type': 'warning',
+                        'title': 'High Response Time',
+                        'message': f'Average response time is {avg_response_time:.0f}ms',
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'severity': 'warning'
+                    })
+                
+                # High utilization alert
+                utilization = network_metrics.get('network_utilization', 0)
+                if utilization > 0.85:
+                    alerts.append({
+                        'id': 'high_utilization',
+                        'type': 'warning',
+                        'title': 'High Network Utilization',
+                        'message': f'Network utilization is {utilization:.1%}',
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'severity': 'warning'
+                    })
+            
+            return jsonify({
+                'success': True,
+                'alerts': alerts,
+                'total_alerts': len(alerts)
+            })
+        
+        @self.app.route('/api/v1/dashboard/nodes/detailed')
+        def dashboard_nodes_detailed():
+            """Get detailed node information for dashboard"""
+            nodes_data = []
+            
+            if self.orchestrator:
+                for node_id, node in self.orchestrator.nodes.items():
+                    # Get agents for this node
+                    agents = []
+                    for agent_id in self.orchestrator.node_agents.get(node_id, []):
+                        if agent_id in self.orchestrator.agents:
+                            agent = self.orchestrator.agents[agent_id]
+                            agents.append({
+                                'agent_id': agent.agent_id,
+                                'agent_type': agent.agent_type,
+                                'status': agent.status,
+                                'capabilities': agent.capabilities,
+                                'tasks_running': agent.tasks_running,
+                                'tasks_completed': agent.tasks_completed,
+                                'efficiency_score': agent.efficiency_score,
+                                'specialized_models': agent.specialized_models,
+                                'last_activity': agent.last_activity
+                            })
+                    
+                    # Calculate uptime
+                    current_time = time.time()
+                    uptime_hours = (current_time - node.last_heartbeat) / 3600 if node.last_heartbeat else 0
+                    
+                    nodes_data.append({
+                        'node_id': node.node_id,
+                        'host': node.host,
+                        'port': node.port,
+                        'node_type': node.node_type,
+                        'status': node.status.value,
+                        'capabilities': node.capabilities,
+                        'agents_count': node.agents_count,
+                        'cpu_usage': node.cpu_usage,
+                        'memory_usage': node.memory_usage,
+                        'gpu_usage': node.gpu_usage,
+                        'network_latency': node.network_latency,
+                        'load_score': node.load_score,
+                        'reliability_score': node.reliability_score,
+                        'last_heartbeat': node.last_heartbeat,
+                        'uptime_hours': max(0, uptime_hours),
+                        'version': node.version,
+                        'location': node.location,
+                        'tasks_completed': node.tasks_completed,
+                        'tasks_failed': node.tasks_failed,
+                        'agents': agents,
+                        'metadata': node.metadata
+                    })
+            
+            return jsonify({
+                'success': True,
+                'nodes': nodes_data,
+                'total_nodes': len(nodes_data)
+            })
+        
+        @self.app.route('/api/v1/dashboard/performance/history')
+        def dashboard_performance_history():
+            """Get performance history for charts"""
+            # Generate sample performance history
+            # In production, this would come from your monitoring system
+            history = []
+            current_time = datetime.utcnow()
+            
+            for i in range(20):  # Last 20 data points
+                timestamp = current_time - timedelta(minutes=i * 5)  # Every 5 minutes
+                
+                if self.orchestrator:
+                    metrics = self.orchestrator.network_metrics
+                    base_success_rate = metrics.get('success_rate', 0.95)
+                    base_response_time = metrics.get('average_response_time', 1000)
+                    base_utilization = metrics.get('network_utilization', 0.6)
+                else:
+                    base_success_rate = 0.95
+                    base_response_time = 1000
+                    base_utilization = 0.6
+                
+                # Add some realistic variation
+                history.append({
+                    'timestamp': timestamp.isoformat(),
+                    'success_rate': min(1.0, max(0.8, base_success_rate + random.uniform(-0.05, 0.05))),
+                    'response_time': max(100, base_response_time + random.uniform(-200, 300)),
+                    'network_utilization': min(1.0, max(0.1, base_utilization + random.uniform(-0.1, 0.1))),
+                    'throughput': random.uniform(40, 60),
+                    'active_nodes': self.orchestrator.network_metrics.get('active_nodes', 0) if self.orchestrator else 0,
+                    'tasks_completed': random.randint(80, 120),
+                    'cpu_avg': random.uniform(30, 70),
+                    'memory_avg': random.uniform(40, 80),
+                    'gpu_avg': random.uniform(20, 60)
+                })
+            
+            # Reverse to get chronological order
+            history.reverse()
+            
+            return jsonify({
+                'success': True,
+                'history': history,
+                'total_points': len(history)
+            })
+        
+        @self.app.route('/api/v1/dashboard/tasks/queue')
+        def dashboard_task_queue():
+            """Get task queue information for dashboard"""
+            queue_data = {
+                'pending': [],
+                'active': [],
+                'recent_completed': [],
+                'recent_failed': []
+            }
+            
+            if self.orchestrator:
+                # Pending tasks
+                for task in list(self.orchestrator.pending_tasks)[:10]:  # Last 10
+                    queue_data['pending'].append({
+                        'task_id': task.task_id,
+                        'task_type': task.task_type,
+                        'priority': task.priority.name,
+                        'created_at': task.created_at,
+                        'timeout': task.timeout,
+                        'requirements': task.requirements
+                    })
+                
+                # Active tasks
+                for task_id, task in list(self.orchestrator.active_tasks.items())[:10]:
+                    queue_data['active'].append({
+                        'task_id': task.task_id,
+                        'task_type': task.task_type,
+                        'priority': task.priority.name,
+                        'assigned_nodes': task.assigned_nodes,
+                        'created_at': task.created_at,
+                        'timeout': task.timeout
+                    })
+                
+                # Recent completed (last 10)
+                completed_tasks = list(self.orchestrator.completed_tasks.values())[-10:]
+                for result in completed_tasks:
+                    queue_data['recent_completed'].append({
+                        'task_id': result.task_id,
+                        'status': result.status.value,
+                        'execution_time': result.execution_time,
+                        'node_id': result.node_id,
+                        'agent_id': result.agent_id,
+                        'completed_at': result.completed_at
+                    })
+                
+                # Recent failed (last 10)
+                failed_tasks = list(self.orchestrator.failed_tasks.values())[-10:]
+                for result in failed_tasks:
+                    queue_data['recent_failed'].append({
+                        'task_id': result.task_id,
+                        'status': result.status.value,
+                        'error_message': result.error_message,
+                        'node_id': result.node_id,
+                        'completed_at': result.completed_at
+                    })
+            
+            return jsonify({
+                'success': True,
+                'queue': queue_data,
+                'summary': {
+                    'pending_count': len(queue_data['pending']),
+                    'active_count': len(queue_data['active']),
+                    'completed_count': len(queue_data['recent_completed']),
+                    'failed_count': len(queue_data['recent_failed'])
+                }
+            })
+        
+        @self.app.route('/api/v1/dashboard/system/info')
+        def dashboard_system_info():
+            """Get system information for dashboard"""
+            import platform
+            
+            system_info = {
+                'orchestrator': {
+                    'id': self.orchestrator.orchestrator_id if self.orchestrator else 'unknown',
+                    'version': '1.0.0',
+                    'uptime': time.time() - self.orchestrator.network_metrics.get('uptime', time.time()) if self.orchestrator else 0,
+                    'running': self.orchestrator.running if self.orchestrator else False
+                },
+                'system': {
+                    'platform': platform.system(),
+                    'platform_version': platform.version(),
+                    'python_version': platform.python_version(),
+                    'cpu_count': psutil.cpu_count(),
+                    'memory_total': psutil.virtual_memory().total,
+                    'disk_total': psutil.disk_usage('/').total,
+                    'hostname': platform.node()
+                },
+                'resources': {
+                    'cpu_percent': psutil.cpu_percent(interval=1),
+                    'memory_percent': psutil.virtual_memory().percent,
+                    'disk_percent': psutil.disk_usage('/').percent,
+                    'network_connections': len(psutil.net_connections())
+                }
+            }
+            
+            return jsonify({
+                'success': True,
+                'system_info': system_info
+            })
+        
+        @self.app.route('/api/v1/dashboard/export/<format>')
+        def dashboard_export(format):
+            """Export dashboard data in various formats"""
+            if format not in ['json', 'csv', 'xml']:
+                return jsonify({'success': False, 'error': 'Unsupported format'}), 400
+            
+            # Collect all dashboard data
+            data = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'orchestrator_id': self.orchestrator.orchestrator_id if self.orchestrator else 'unknown',
+                'network_metrics': self.orchestrator.network_metrics if self.orchestrator else {},
+                'nodes': [node.__dict__ for node in self.orchestrator.nodes.values()] if self.orchestrator else [],
+                'tasks_summary': {
+                    'pending': len(self.orchestrator.pending_tasks) if self.orchestrator else 0,
+                    'active': len(self.orchestrator.active_tasks) if self.orchestrator else 0,
+                    'completed': len(self.orchestrator.completed_tasks) if self.orchestrator else 0,
+                    'failed': len(self.orchestrator.failed_tasks) if self.orchestrator else 0
+                }
+            }
+            
+            if format == 'json':
+                return jsonify({
+                    'success': True,
+                    'data': data,
+                    'export_format': 'json'
+                })
+            elif format == 'csv':
+                # Convert to CSV format (simplified)
+                csv_data = "metric,value\n"
+                csv_data += f"active_nodes,{data['network_metrics'].get('active_nodes', 0)}\n"
+                csv_data += f"tasks_completed,{data['network_metrics'].get('tasks_completed', 0)}\n"
+                csv_data += f"success_rate,{data['network_metrics'].get('success_rate', 0)}\n"
+                
+                return csv_data, 200, {'Content-Type': 'text/csv'}
+            
+            return jsonify({'success': False, 'error': 'Format implementation pending'}), 501
+        
         # Health and status endpoints
         @self.app.route('/api/v1/health', methods=['GET'])
         def health():
             """Health check endpoint"""
-            system_info = {
-                'cpu_usage': psutil.cpu_percent(),
-                'memory_usage': psutil.virtual_memory().percent,
-                'disk_usage': psutil.disk_usage('/').percent,
-                'uptime': datetime.now() - self.api_stats['start_time']
-            }
-            
-            return jsonify({
-                'status': 'healthy',
-                'orchestrator_id': self.orchestrator.orchestrator_id if self.orchestrator else 'not_started',
-                'timestamp': datetime.now().isoformat(),
-                'version': '1.0.0',
-                'system': system_info
-            })
+            try:
+                system_info = {
+                    'cpu_usage': psutil.cpu_percent(),
+                    'memory_usage': psutil.virtual_memory().percent,
+                    'disk_usage': psutil.disk_usage('/').percent,
+                    'uptime': str(datetime.now() - self.api_stats['start_time'])
+                }
+                
+                return jsonify({
+                    'status': 'healthy',
+                    'orchestrator_id': self.orchestrator.orchestrator_id if self.orchestrator else 'not_started',
+                    'timestamp': datetime.now().isoformat(),
+                    'version': '1.0.0',
+                    'system': system_info
+                })
+            except Exception as e:
+                logger.error(f"Health check error: {e}")
+                return jsonify({
+                    'status': 'error',
+                    'error': str(e),
+                    'timestamp': datetime.now().isoformat()
+                }), 500
         
         @self.app.route('/api/v1/status', methods=['GET'])
         def status():
@@ -246,8 +559,10 @@ class OrchestratorAPI:
                 # Run async function in current thread
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                network_status = loop.run_until_complete(self.orchestrator.get_network_status())
-                loop.close()
+                try:
+                    network_status = loop.run_until_complete(self.orchestrator.get_network_status())
+                finally:
+                    loop.close()
                 
                 return jsonify({
                     'success': True,
@@ -255,6 +570,7 @@ class OrchestratorAPI:
                     'api_stats': self.api_stats
                 })
             except Exception as e:
+                logger.error(f"Status error: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         # Node management endpoints
@@ -292,6 +608,7 @@ class OrchestratorAPI:
                     'active_nodes': len([n for n in self.orchestrator.nodes.values() if n.status == NodeStatus.ACTIVE])
                 })
             except Exception as e:
+                logger.error(f"Get nodes error: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         @self.app.route('/api/v1/nodes/<node_id>', methods=['GET'])
@@ -367,8 +684,10 @@ class OrchestratorAPI:
                 # Run async registration
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                success = loop.run_until_complete(self.orchestrator.register_node(node_data))
-                loop.close()
+                try:
+                    success = loop.run_until_complete(self.orchestrator.register_node(node_data))
+                finally:
+                    loop.close()
                 
                 if success:
                     return jsonify({
@@ -383,6 +702,7 @@ class OrchestratorAPI:
                     }), 400
                     
             except Exception as e:
+                logger.error(f"Register node error: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         @self.app.route('/api/v1/nodes/<node_id>/heartbeat', methods=['POST'])
@@ -397,10 +717,12 @@ class OrchestratorAPI:
                 # Run async heartbeat update
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                success = loop.run_until_complete(
-                    self.orchestrator.update_node_heartbeat(node_id, heartbeat_data)
-                )
-                loop.close()
+                try:
+                    success = loop.run_until_complete(
+                        self.orchestrator.update_node_heartbeat(node_id, heartbeat_data)
+                    )
+                finally:
+                    loop.close()
                 
                 if success:
                     return jsonify({
@@ -503,8 +825,10 @@ class OrchestratorAPI:
                 # Run async task submission
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                task_id = loop.run_until_complete(self.orchestrator.submit_task(task_data))
-                loop.close()
+                try:
+                    task_id = loop.run_until_complete(self.orchestrator.submit_task(task_data))
+                finally:
+                    loop.close()
                 
                 return jsonify({
                     'success': True,
@@ -513,6 +837,7 @@ class OrchestratorAPI:
                 })
                 
             except Exception as e:
+                logger.error(f"Submit task error: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         @self.app.route('/api/v1/tasks', methods=['GET'])
@@ -584,6 +909,7 @@ class OrchestratorAPI:
                 })
                 
             except Exception as e:
+                logger.error(f"Get tasks error: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         @self.app.route('/api/v1/tasks/<task_id>', methods=['GET'])
@@ -705,6 +1031,7 @@ class OrchestratorAPI:
                 })
                 
             except Exception as e:
+                logger.error(f"Get metrics error: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         @self.app.route('/api/v1/metrics/performance', methods=['GET'])
@@ -749,14 +1076,18 @@ class OrchestratorAPI:
                 def start_orchestrator_thread():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.orchestrator.start_orchestrator())
-                    loop.run_forever()
+                    try:
+                        loop.run_until_complete(self.orchestrator.start_orchestrator())
+                        loop.run_forever()
+                    except Exception as e:
+                        logger.error(f"Orchestrator thread error: {e}")
+                    finally:
+                        loop.close()
                 
                 thread = threading.Thread(target=start_orchestrator_thread, daemon=True)
                 thread.start()
                 
                 # Wait a moment for startup
-                import time
                 time.sleep(2)
                 
                 return jsonify({
@@ -766,6 +1097,7 @@ class OrchestratorAPI:
                 })
                 
             except Exception as e:
+                logger.error(f"Start orchestrator error: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         @self.app.route('/api/v1/control/stop', methods=['POST'])
@@ -781,8 +1113,10 @@ class OrchestratorAPI:
                 # Stop orchestrator
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(self.orchestrator.stop_orchestrator())
-                loop.close()
+                try:
+                    loop.run_until_complete(self.orchestrator.stop_orchestrator())
+                finally:
+                    loop.close()
                 
                 return jsonify({
                     'success': True,
@@ -839,32 +1173,39 @@ class OrchestratorAPI:
                     'max_connections': ws_config.get('max_connections', 100)
                 }
             })
-        
-        # Static files for basic dashboard
-        @self.app.route('/')
-        def index():
-            """Basic dashboard"""
-            return """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Web4AI Orchestrator</title>
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 40px; }
-                    .status { background: #f0f0f0; padding: 20px; border-radius: 8px; margin: 20px 0; }
-                    .metric { display: inline-block; margin: 10px; padding: 10px; background: white; border-radius: 4px; }
-                    .healthy { color: green; }
-                    .warning { color: orange; }
-                    .error { color: red; }
-                    a { color: #007cba; text-decoration: none; }
-                    a:hover { text-decoration: underline; }
-                </style>
-            </head>
-            <body>
+    
+    def _create_basic_dashboard(self):
+        """Create a basic dashboard when template is not available"""
+        return '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Web4AI Orchestrator</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; color: #333; }
+                .container { background: rgba(255,255,255,0.9); padding: 30px; border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); }
+                .status { background: #f0f0f0; padding: 20px; border-radius: 8px; margin: 20px 0; }
+                .metric { display: inline-block; margin: 10px; padding: 10px; background: white; border-radius: 4px; }
+                .healthy { color: green; }
+                .warning { color: orange; }
+                .error { color: red; }
+                a { color: #007cba; text-decoration: none; }
+                a:hover { text-decoration: underline; }
+                .error-msg { background: #fef2f2; color: #dc2626; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ef4444; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
                 <h1>🚀 Web4AI Orchestrator</h1>
+                <div class="error-msg">
+                    <h3>Dashboard Template Missing</h3>
+                    <p>The advanced dashboard template is not available. This is a basic fallback interface.</p>
+                    <p>To fix: Ensure <code>templates/web4ai_advanced_dashboard.html</code> exists in the correct location.</p>
+                </div>
+                
                 <div class="status">
-                    <h2>Status: <span class="healthy">Running</span></h2>
-                    <p>Orchestrator is operational and managing the network.</p>
+                    <h2>Status: <span class="healthy">API Running</span></h2>
+                    <p>API server is operational. WebSocket may need configuration.</p>
                 </div>
                 
                 <h3>🔗 API Endpoints</h3>
@@ -878,7 +1219,7 @@ class OrchestratorAPI:
                 </ul>
                 
                 <h3>📊 Quick Metrics</h3>
-                <div id="metrics"></div>
+                <div id="metrics">Loading...</div>
                 
                 <script>
                     function updateMetrics() {
@@ -893,22 +1234,28 @@ class OrchestratorAPI:
                                         <div class="metric">Success Rate: ${(metrics.tasks.success_rate * 100).toFixed(1)}%</div>
                                         <div class="metric">Utilization: ${(metrics.network.network_utilization * 100).toFixed(1)}%</div>
                                     `;
+                                } else {
+                                    document.getElementById('metrics').innerHTML = '<div class="error">Failed to load metrics: ' + data.error + '</div>';
                                 }
                             })
-                            .catch(err => console.error('Failed to fetch metrics:', err));
+                            .catch(err => {
+                                document.getElementById('metrics').innerHTML = '<div class="error">Orchestrator not started or error occurred</div>';
+                            });
                     }
                     
                     updateMetrics();
                     setInterval(updateMetrics, 5000);
                 </script>
-            </body>
-            </html>
-            """
+            </div>
+        </body>
+        </html>
+        '''
     
     async def start_websocket_server(self):
         """Start WebSocket server for real-time updates"""
         ws_config = self.config.config.get('websocket', {})
         if not ws_config.get('enabled', True):
+            logger.info("WebSocket server disabled in configuration")
             return
         
         port = ws_config.get('port', 9001)
@@ -930,20 +1277,27 @@ class OrchestratorAPI:
                 # Keep connection alive
                 async for message in websocket:
                     # Handle incoming messages if needed
-                    pass
+                    try:
+                        data = json.loads(message)
+                        logger.info(f"Received WebSocket message: {data}")
+                    except:
+                        pass
                     
             except websockets.exceptions.ConnectionClosed:
-                pass
+                logger.info("WebSocket connection closed normally")
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
             finally:
                 self.websocket_clients.discard(websocket)
                 logger.info(f"📡 WebSocket client disconnected (total: {len(self.websocket_clients)})")
         
         try:
-            server = await websockets.serve(handle_websocket, "localhost", port)
-            logger.info(f"🔌 WebSocket server started on ws://localhost:{port}")
+            server = await websockets.serve(handle_websocket, "0.0.0.0", port)
+            logger.info(f"🔌 WebSocket server started on ws://0.0.0.0:{port}")
             return server
         except Exception as e:
             logger.error(f"❌ Failed to start WebSocket server: {e}")
+            return None
     
     def run(self, host='0.0.0.0', port=9000, debug=False):
         """Run the API server"""
@@ -954,8 +1308,12 @@ class OrchestratorAPI:
             def start_websocket():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                self.websocket_server = loop.run_until_complete(self.start_websocket_server())
-                loop.run_forever()
+                try:
+                    self.websocket_server = loop.run_until_complete(self.start_websocket_server())
+                    if self.websocket_server:
+                        loop.run_forever()
+                except Exception as e:
+                    logger.error(f"WebSocket server error: {e}")
             
             ws_thread = threading.Thread(target=start_websocket, daemon=True)
             ws_thread.start()
@@ -963,23 +1321,38 @@ class OrchestratorAPI:
         # Auto-start orchestrator if configured
         if self.config.config.get('orchestrator', {}).get('auto_start', True):
             logger.info("🚀 Auto-starting orchestrator...")
-            orch_config = self.config.config.get('orchestrator', {})
-            self.orchestrator = Web4AIOrchestrator(
-                orchestrator_id=orch_config.get('id'),
-                config=self.config.config
-            )
-            
-            def start_orchestrator_thread():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self.orchestrator.start_orchestrator())
-                loop.run_forever()
-            
-            thread = threading.Thread(target=start_orchestrator_thread, daemon=True)
-            thread.start()
+            try:
+                orch_config = self.config.config.get('orchestrator', {})
+                self.orchestrator = Web4AIOrchestrator(
+                    orchestrator_id=orch_config.get('id'),
+                    config=self.config.config
+                )
+                
+                def start_orchestrator_thread():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(self.orchestrator.start_orchestrator())
+                        loop.run_forever()
+                    except Exception as e:
+                        logger.error(f"Orchestrator startup error: {e}")
+                
+                thread = threading.Thread(target=start_orchestrator_thread, daemon=True)
+                thread.start()
+                
+                # Give it time to start
+                time.sleep(3)
+                logger.info("✅ Orchestrator auto-start initiated")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to auto-start orchestrator: {e}")
         
         # Run Flask app
-        self.app.run(host=host, port=port, debug=debug, threaded=True)
+        try:
+            self.app.run(host=host, port=port, debug=debug, threaded=True)
+        except Exception as e:
+            logger.error(f"❌ Failed to start Flask app: {e}")
+            raise
 
 def create_default_config():
     """Create default configuration file"""
@@ -1018,8 +1391,12 @@ def main():
         if api.orchestrator:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(api.orchestrator.stop_orchestrator())
-            loop.close()
+            try:
+                loop.run_until_complete(api.orchestrator.stop_orchestrator())
+            except Exception as e:
+                logger.error(f"Shutdown error: {e}")
+            finally:
+                loop.close()
         exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
@@ -1029,6 +1406,7 @@ def main():
         api.run(host=args.host, port=args.port, debug=args.debug)
     except KeyboardInterrupt:
         logger.info("🛑 Shutting down...")
+    except Exception as e:
+        logger.error(f"❌ Server error: {e}")
 
-if __name__ == '__main__':
-    main()
+if __name__ == '

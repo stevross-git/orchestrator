@@ -5,7 +5,7 @@
 ### Essential Commands
 ```bash
 # Start orchestrator
-python orchestrator_cli.py start --config orchestrator_config.yaml
+python orchestrator_api.py start --config orchestrator_config.yaml
 
 # Check status
 python orchestrator_cli.py status
