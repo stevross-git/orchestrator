@@ -29,10 +29,11 @@
             grid-template-areas: 
                 "header header header"
                 "sidebar main main"
-                "sidebar main main";
+                "sidebar main main"
+                "topology topology topology";
             grid-template-columns: 320px 1fr 1fr;
-            grid-template-rows: 80px 1fr 1fr;
-            height: 100vh;
+            grid-template-rows: 80px 1fr 1fr auto;
+            min-height: 100vh;
             gap: 20px;
             padding: 20px;
         }
@@ -459,18 +460,17 @@
         .icon-info { background: #3b82f6; color: white; }
 
         .network-topology {
+            grid-area: topology;
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(10px);
             border-radius: 15px;
             padding: 20px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            grid-column: 1 / -1;
-            margin-top: 20px;
         }
 
         .topology-svg {
             width: 100%;
-            height: 300px;
+            height: 400px;
             border-radius: 10px;
             background: #f8fafc;
         }
@@ -605,9 +605,10 @@
                 grid-template-areas: 
                     "header"
                     "main"
-                    "sidebar";
+                    "sidebar"
+                    "topology";
                 grid-template-columns: 1fr;
-                grid-template-rows: auto 1fr auto;
+                grid-template-rows: auto 1fr auto auto;
             }
 
             .main-content {
@@ -616,6 +617,10 @@
 
             .metrics-grid {
                 grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            }
+
+            .topology-svg {
+                height: 300px;
             }
         }
 
@@ -814,7 +819,7 @@
 
         <!-- Network Topology -->
         <div class="network-topology">
-            <div class="chart-title">🌐 Network Topology</div>
+            <div class="chart-title">🌐 Network Topology - Orchestrator, Nodes & Agents</div>
             <svg class="topology-svg" id="topologySvg"></svg>
         </div>
     </div>
@@ -1693,54 +1698,139 @@
                 svg.selectAll('*').remove();
 
                 const width = svg.node().clientWidth;
-                const height = 300;
+                const height = 400;
 
                 // Create orchestrator node
                 const orchestrator = {
                     id: 'orchestrator',
                     x: width / 2,
-                    y: 50,
-                    type: 'orchestrator'
+                    y: 80,
+                    type: 'orchestrator',
+                    label: '🎛️ Orchestrator'
                 };
 
-                // Create nodes with agent counts
+                // Create nodes and agents with detailed positioning
                 const nodes = [orchestrator];
+                const links = [];
                 const nodeDetails = Array.from(this.nodeDetails.values());
                 
                 if (nodeDetails.length > 0) {
                     nodeDetails.forEach((nodeDetail, i) => {
                         const angle = (i / nodeDetails.length) * 2 * Math.PI;
-                        const radius = 150;
-                        nodes.push({
+                        const nodeRadius = 200;
+                        const nodeX = width / 2 + Math.cos(angle) * nodeRadius;
+                        const nodeY = height / 2 + Math.sin(angle) * nodeRadius;
+                        
+                        // Add node
+                        const nodeObj = {
                             id: nodeDetail.node_id,
-                            x: width / 2 + Math.cos(angle) * radius,
-                            y: height / 2 + Math.sin(angle) * radius,
+                            x: nodeX,
+                            y: nodeY,
                             type: 'node',
-                            agentCount: nodeDetail.agents ? nodeDetail.agents.length : 0
+                            agentCount: nodeDetail.agents ? nodeDetail.agents.length : 0,
+                            status: nodeDetail.status,
+                            label: `🖥️ ${nodeDetail.node_id}`
+                        };
+                        nodes.push(nodeObj);
+                        
+                        // Add link from orchestrator to node
+                        links.push({
+                            source: orchestrator,
+                            target: nodeObj,
+                            type: 'orchestrator-node'
                         });
+                        
+                        // Add agents around each node
+                        if (nodeDetail.agents && nodeDetail.agents.length > 0) {
+                            nodeDetail.agents.forEach((agent, agentIndex) => {
+                                const agentAngle = (agentIndex / nodeDetail.agents.length) * 2 * Math.PI;
+                                const agentRadius = 80;
+                                const agentX = nodeX + Math.cos(agentAngle) * agentRadius;
+                                const agentY = nodeY + Math.sin(agentAngle) * agentRadius;
+                                
+                                const agentObj = {
+                                    id: agent.agent_id,
+                                    x: agentX,
+                                    y: agentY,
+                                    type: 'agent',
+                                    agentType: agent.agent_type,
+                                    status: agent.status,
+                                    tasksRunning: agent.tasks_running || 0,
+                                    efficiency: agent.efficiency_score || 0,
+                                    label: `🤖 ${agent.agent_id}`,
+                                    parentNode: nodeDetail.node_id
+                                };
+                                nodes.push(agentObj);
+                                
+                                // Add link from node to agent
+                                links.push({
+                                    source: nodeObj,
+                                    target: agentObj,
+                                    type: 'node-agent'
+                                });
+                            });
+                        }
                     });
                 } else {
-                    // Fallback to sample nodes
+                    // Fallback to sample nodes with agents
                     const activeNodeCount = data.network_metrics?.active_nodes || 3;
                     for (let i = 0; i < activeNodeCount; i++) {
                         const angle = (i / activeNodeCount) * 2 * Math.PI;
-                        const radius = 150;
-                        nodes.push({
+                        const nodeRadius = 200;
+                        const nodeX = width / 2 + Math.cos(angle) * nodeRadius;
+                        const nodeY = height / 2 + Math.sin(angle) * nodeRadius;
+                        
+                        const nodeObj = {
                             id: `node-${i + 1}`,
-                            x: width / 2 + Math.cos(angle) * radius,
-                            y: height / 2 + Math.sin(angle) * radius,
+                            x: nodeX,
+                            y: nodeY,
                             type: 'node',
-                            agentCount: Math.floor(Math.random() * 5) + 1
+                            agentCount: Math.floor(Math.random() * 5) + 1,
+                            status: 'active',
+                            label: `🖥️ node-${i + 1}`
+                        };
+                        nodes.push(nodeObj);
+                        
+                        // Add link from orchestrator to node
+                        links.push({
+                            source: orchestrator,
+                            target: nodeObj,
+                            type: 'orchestrator-node'
                         });
+                        
+                        // Add sample agents
+                        const agentCount = nodeObj.agentCount;
+                        for (let j = 0; j < agentCount; j++) {
+                            const agentAngle = (j / agentCount) * 2 * Math.PI;
+                            const agentRadius = 80;
+                            const agentX = nodeX + Math.cos(agentAngle) * agentRadius;
+                            const agentY = nodeY + Math.sin(agentAngle) * agentRadius;
+                            
+                            const agentObj = {
+                                id: `agent-${i+1}-${j+1}`,
+                                x: agentX,
+                                y: agentY,
+                                type: 'agent',
+                                agentType: 'sample_agent',
+                                status: Math.random() > 0.2 ? 'active' : 'idle',
+                                tasksRunning: Math.floor(Math.random() * 3),
+                                efficiency: Math.random() * 0.4 + 0.6,
+                                label: `🤖 agent-${i+1}-${j+1}`,
+                                parentNode: `node-${i + 1}`
+                            };
+                            nodes.push(agentObj);
+                            
+                            // Add link from node to agent
+                            links.push({
+                                source: nodeObj,
+                                target: agentObj,
+                                type: 'node-agent'
+                            });
+                        }
                     }
                 }
 
-                // Draw connections
-                const links = nodes.slice(1).map(node => ({
-                    source: orchestrator,
-                    target: node
-                }));
-
+                // Draw connections with different styles
                 svg.selectAll('.link')
                     .data(links)
                     .enter().append('line')
@@ -1749,47 +1839,187 @@
                     .attr('y1', d => d.source.y)
                     .attr('x2', d => d.target.x)
                     .attr('y2', d => d.target.y)
-                    .attr('stroke', '#667eea')
-                    .attr('stroke-width', 2)
-                    .attr('opacity', 0.6);
+                    .attr('stroke', d => {
+                        if (d.type === 'orchestrator-node') return '#667eea';
+                        if (d.type === 'node-agent') return '#10b981';
+                        return '#94a3b8';
+                    })
+                    .attr('stroke-width', d => {
+                        if (d.type === 'orchestrator-node') return 3;
+                        if (d.type === 'node-agent') return 2;
+                        return 1;
+                    })
+                    .attr('opacity', d => {
+                        if (d.type === 'orchestrator-node') return 0.8;
+                        if (d.type === 'node-agent') return 0.6;
+                        return 0.4;
+                    });
 
-                // Draw nodes
-                const nodeGroups = svg.selectAll('.node')
+                // Create node groups with enhanced styling
+                const nodeGroups = svg.selectAll('.topology-node')
                     .data(nodes)
                     .enter().append('g')
-                    .attr('class', 'node')
-                    .attr('transform', d => `translate(${d.x}, ${d.y})`);
+                    .attr('class', 'topology-node')
+                    .attr('transform', d => `translate(${d.x}, ${d.y})`)
+                    .style('cursor', 'pointer')
+                    .on('mouseover', function(event, d) {
+                        // Highlight node and connections
+                        d3.select(this).select('circle').attr('stroke-width', 4);
+                        // Show tooltip with node info
+                        const tooltip = d3.select('body').append('div')
+                            .attr('class', 'topology-tooltip')
+                            .style('position', 'absolute')
+                            .style('background', 'rgba(0,0,0,0.8)')
+                            .style('color', 'white')
+                            .style('padding', '8px')
+                            .style('border-radius', '4px')
+                            .style('font-size', '12px')
+                            .style('pointer-events', 'none')
+                            .style('z-index', '1000')
+                            .style('left', (event.pageX + 10) + 'px')
+                            .style('top', (event.pageY - 10) + 'px');
+                        
+                        if (d.type === 'orchestrator') {
+                            tooltip.html(`<strong>Orchestrator</strong><br/>Managing ${nodes.filter(n => n.type === 'node').length} nodes`);
+                        } else if (d.type === 'node') {
+                            tooltip.html(`<strong>${d.id}</strong><br/>Status: ${d.status}<br/>Agents: ${d.agentCount}<br/>Type: Node`);
+                        } else if (d.type === 'agent') {
+                            tooltip.html(`<strong>${d.id}</strong><br/>Type: ${d.agentType}<br/>Status: ${d.status}<br/>Tasks: ${d.tasksRunning}<br/>Efficiency: ${(d.efficiency * 100).toFixed(1)}%<br/>Node: ${d.parentNode}`);
+                        }
+                    })
+                    .on('mouseout', function(event, d) {
+                        d3.select(this).select('circle').attr('stroke-width', 2);
+                        d3.selectAll('.topology-tooltip').remove();
+                    });
 
+                // Draw node circles with size and color based on type
                 nodeGroups.append('circle')
-                    .attr('r', d => d.type === 'orchestrator' ? 25 : 15)
-                    .attr('fill', d => d.type === 'orchestrator' ? '#667eea' : '#10b981')
+                    .attr('r', d => {
+                        if (d.type === 'orchestrator') return 30;
+                        if (d.type === 'node') return 20;
+                        if (d.type === 'agent') return 12;
+                        return 10;
+                    })
+                    .attr('fill', d => {
+                        if (d.type === 'orchestrator') return '#667eea';
+                        if (d.type === 'node') {
+                            if (d.status === 'active') return '#10b981';
+                            if (d.status === 'degraded') return '#f59e0b';
+                            if (d.status === 'offline') return '#ef4444';
+                            return '#6b7280';
+                        }
+                        if (d.type === 'agent') {
+                            if (d.status === 'active') return '#06b6d4';
+                            if (d.status === 'idle') return '#94a3b8';
+                            return '#6b7280';
+                        }
+                        return '#94a3b8';
+                    })
                     .attr('stroke', '#fff')
-                    .attr('stroke-width', 2);
+                    .attr('stroke-width', 2)
+                    .attr('opacity', d => {
+                        if (d.type === 'agent' && d.status !== 'active') return 0.6;
+                        return 1;
+                    });
 
+                // Add icons/emojis
                 nodeGroups.append('text')
                     .attr('text-anchor', 'middle')
-                    .attr('dy', 4)
+                    .attr('dy', 6)
                     .attr('fill', 'white')
-                    .attr('font-size', d => d.type === 'orchestrator' ? '12px' : '10px')
+                    .attr('font-size', d => {
+                        if (d.type === 'orchestrator') return '18px';
+                        if (d.type === 'node') return '14px';
+                        if (d.type === 'agent') return '10px';
+                        return '12px';
+                    })
                     .attr('font-weight', 'bold')
-                    .text(d => d.type === 'orchestrator' ? '🎛️' : '🖥️');
+                    .text(d => {
+                        if (d.type === 'orchestrator') return '🎛️';
+                        if (d.type === 'node') return '🖥️';
+                        if (d.type === 'agent') return '🤖';
+                        return '📦';
+                    });
 
+                // Add labels below nodes
                 nodeGroups.append('text')
                     .attr('text-anchor', 'middle')
-                    .attr('dy', -30)
+                    .attr('dy', d => {
+                        if (d.type === 'orchestrator') return -40;
+                        if (d.type === 'node') return -30;
+                        if (d.type === 'agent') return -20;
+                        return -25;
+                    })
                     .attr('fill', '#374151')
-                    .attr('font-size', '12px')
+                    .attr('font-size', d => {
+                        if (d.type === 'orchestrator') return '14px';
+                        if (d.type === 'node') return '12px';
+                        if (d.type === 'agent') return '10px';
+                        return '11px';
+                    })
                     .attr('font-weight', '600')
-                    .text(d => d.id);
+                    .text(d => {
+                        if (d.type === 'orchestrator') return 'Orchestrator';
+                        if (d.type === 'node') return d.id;
+                        if (d.type === 'agent') return d.id.split('-').pop(); // Show just the agent number
+                        return d.id;
+                    });
 
-                // Add agent count for regular nodes
-                nodeGroups.filter(d => d.type === 'node')
+                // Add status indicators for agents
+                nodeGroups.filter(d => d.type === 'agent')
+                    .append('circle')
+                    .attr('cx', 8)
+                    .attr('cy', -8)
+                    .attr('r', 3)
+                    .attr('fill', d => {
+                        if (d.status === 'active') return '#10b981';
+                        if (d.status === 'idle') return '#f59e0b';
+                        return '#ef4444';
+                    })
+                    .attr('stroke', '#fff')
+                    .attr('stroke-width', 1);
+
+                // Add task count for active agents
+                nodeGroups.filter(d => d.type === 'agent' && d.tasksRunning > 0)
                     .append('text')
+                    .attr('x', -8)
+                    .attr('y', -8)
                     .attr('text-anchor', 'middle')
-                    .attr('dy', 25)
-                    .attr('fill', '#6b7280')
-                    .attr('font-size', '10px')
-                    .text(d => `${d.agentCount} agents`);
+                    .attr('dy', 3)
+                    .attr('fill', '#fff')
+                    .attr('font-size', '8px')
+                    .attr('font-weight', 'bold')
+                    .text(d => d.tasksRunning);
+
+                // Add legend
+                const legend = svg.append('g')
+                    .attr('class', 'topology-legend')
+                    .attr('transform', `translate(20, ${height - 120})`);
+
+                const legendItems = [
+                    { type: 'orchestrator', color: '#667eea', label: '🎛️ Orchestrator', icon: '🎛️' },
+                    { type: 'node', color: '#10b981', label: '🖥️ Active Node', icon: '🖥️' },
+                    { type: 'agent', color: '#06b6d4', label: '🤖 Active Agent', icon: '🤖' },
+                    { type: 'agent-idle', color: '#94a3b8', label: '🤖 Idle Agent', icon: '🤖' }
+                ];
+
+                legendItems.forEach((item, i) => {
+                    const legendItem = legend.append('g')
+                        .attr('transform', `translate(0, ${i * 20})`);
+                    
+                    legendItem.append('circle')
+                        .attr('r', 6)
+                        .attr('fill', item.color)
+                        .attr('stroke', '#fff')
+                        .attr('stroke-width', 1);
+                    
+                    legendItem.append('text')
+                        .attr('x', 15)
+                        .attr('dy', 4)
+                        .attr('font-size', '12px')
+                        .attr('fill', '#374151')
+                        .text(item.label);
+                });
             }
 
             updateTasks(tasks) {
