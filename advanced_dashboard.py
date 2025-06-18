@@ -31,7 +31,7 @@ st.set_page_config(
 )
 
 # Custom CSS
-st.markdown("""
+LIGHT_MODE_CSS = """
 <style>
     .main-header {
         text-align: center;
@@ -60,7 +60,22 @@ st.markdown("""
         font-weight: bold;
     }
 </style>
-""", unsafe_allow_html=True)
+"""
+
+DARK_MODE_CSS = """
+<style>
+    .stApp {
+        background-color: #0e1117;
+        color: #f1f1f1;
+    }
+    .main-header {
+        color: #90caf9;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #374151 0%, #1f2937 100%);
+    }
+</style>
+"""
 
 def safe_get(data, key, default=None):
     """Safely get a value from data, handling both dict and non-dict cases"""
@@ -362,6 +377,13 @@ def display_system_logs():
 
 def main():
     """Main dashboard function"""
+    dark_mode = st.sidebar.checkbox("🌙 Dark mode", value=False)
+
+    if dark_mode:
+        st.markdown(DARK_MODE_CSS, unsafe_allow_html=True)
+    else:
+        st.markdown(LIGHT_MODE_CSS, unsafe_allow_html=True)
+
     display_header()
     
     # Auto-refresh checkbox
